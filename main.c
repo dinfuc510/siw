@@ -1,3 +1,4 @@
+// #define _WIN32_WINNT 0x0500		// Windows 2000 Professional
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <assert.h>
@@ -28,10 +29,21 @@ typedef enum CaptionButton {
 
 static HMODULE g_hmodule;
 
+long get_nbits_from_ith(long num, unsigned char i, unsigned char n) {
+	assert(i + n <= sizeof(long));
+	return (num >> i) & ((1 << n) - 1);
+}
+
+void set_nbits_from_ith(long *num, unsigned char i, unsigned char n, long value) {
+	assert(i + n <= sizeof(long));
+	assert(value < (1 << n));
+	assert(num != NULL);
+	*num = (*num & ~((1 << n) - 1) << i) | (value << i);
+}
+
 CaptionButton get_caption_button(HWND hwnd) {
 	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	long mask = (1 << 3) - 1;
-	CaptionButton button = data & mask;
+	CaptionButton button = (CaptionButton) get_nbits_from_ith(data, 0, 3);
 	assert(CaptionButton_None <= button && button <= CaptionButton_Sysmenu);
 	return button;
 }
@@ -39,20 +51,19 @@ CaptionButton get_caption_button(HWND hwnd) {
 void set_caption_button(HWND hwnd, CaptionButton button) {
 	assert(CaptionButton_None <= button && button <= CaptionButton_Sysmenu);
 	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	long mask = (1 << 3) - 1;
-	data = (data & ~mask) | (int) button;
+	set_nbits_from_ith(&data, 0, 3, button);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) data);
 }
 
 bool get_is_mouse_leave(HWND hwnd) {
 	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	bool is_mouse_leave = (data >> 3) & 0x1;
+	bool is_mouse_leave = (bool) get_nbits_from_ith(data, 3, 1);
 	return is_mouse_leave;
 }
 
 void set_is_mouse_leave(HWND hwnd, bool flag) {
 	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	data = (data & ~(1 << 3)) | (flag << 3);
+	set_nbits_from_ith(&data, 3, 1, flag);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) data);
 }
 
@@ -225,14 +236,13 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	}
 }
 
-bool track_mouse_move(HWND hwnd) {
-	TRACKMOUSEEVENT tme = {
+// #define TME_NONCLIENT 0x00000010
+bool track_mouse_leave(HWND hwnd) {
+	return TrackMouseEvent(& (TRACKMOUSEEVENT) {
 		.cbSize = sizeof(TRACKMOUSEEVENT),
-		.dwFlags = TME_LEAVE,
-		.dwHoverTime = 1,
+		.dwFlags = TME_NONCLIENT | TME_LEAVE,
 		.hwndTrack = hwnd,
-	};
-	return TrackMouseEvent(&tme);
+	});
 }
 
 static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -269,6 +279,17 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 	switch(msg) {
 		case WM_CREATE: {
+#if 0 		// sometimes, the window has rounded border (windows xp theme)
+			MONITORINFO mi;
+			mi.cbSize = sizeof(mi);
+		    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+				HRGN hrgn = CreateRectRgn(mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
+				if (hrgn != NULL) {
+					SetWindowRgn(hwnd, hrgn, false);
+					DeleteObject(hrgn);
+				}
+			}
+#endif
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
 						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
 			set_is_mouse_leave(hwnd, true);
@@ -289,6 +310,10 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			InvalidateRect(hwnd, &title_bar_rect, false);
 			return 0;
 	    }
+		case WM_NCACTIVATE: {
+			lparam = -1;
+			return true;
+		}
 		case WM_PAINT: {
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint(hwnd, &ps);
@@ -369,9 +394,13 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 			return HTNOWHERE;
 		}
+		// https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag
 		case WM_NCCALCSIZE: {
 			if (wparam) {
-				return 0;
+				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
+				params->rgrc[0].right -= border_width;
+				params->rgrc[0].bottom -= border_width;
+				return /*0*/ WVR_VALIDRECTS;			// make the resize smoothly
 			}
 			break;
 		}
@@ -450,7 +479,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_NCMOUSEMOVE: {
 			if (is_mouse_leave) {
-				track_mouse_move(hwnd);
+				track_mouse_leave(hwnd);
 				set_is_mouse_leave(hwnd, false);
 			}
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
@@ -541,7 +570,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 					POINT menu_pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
 					int cmd = TrackPopupMenuEx(hmenu,
-							TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN) /*TPM_LEFTALIGN | TPM_RETURNCMD*/,
+							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
 							menu_pos.x, menu_pos.y, hwnd, NULL);
 					if (cmd != 0) {
 						PostMessage(hwnd, WM_SYSCOMMAND, cmd, 0);
@@ -565,6 +594,18 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
+		// case WM_WINDOWPOSCHANGING: {
+		// 	WINDOWPOS* lpwpos = (WINDOWPOS*) lparam;
+		// 	// // lpwpos->flags |= SWP_NOCOPYBITS;
+		// 	// if (!(lpwpos->flags & SWP_NOSIZE)) {
+		// 	// 	RECT rc;
+        // 	// 	GetClientRect(hwnd, &rc);
+		//     //     // rc.left = rc.right - border_width;
+		//     //     rc.top = rc.bottom - border_width;
+		//     //     InvalidateRect(hwnd, &rc, true);
+		//     // }
+		// 	break;
+		// }
 	}
 
 	return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -591,12 +632,12 @@ int main(void)
 		return 1;
 	}
 
-	if (!register_window_class("Window", win_proc)) {
+	if (!register_window_class("SWindow", win_proc)) {
 		fprintf(stderr, "ERROR: could not register class: %ld\n", GetLastError());
 		return 1;
 	}
 
-	HWND window = CreateWindowEx(0 /*| WS_EX_TOOLWINDOW*/, "Window", "Simple Window",
+	HWND window = CreateWindowEx(0 /*| WS_EX_TOOLWINDOW*/, "SWindow", "Simple Window",
 		WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU,
 		0, 0, 700, 500, NULL, NULL, g_hmodule, NULL);
 	// EnableMenuItem(GetSystemMenu(window, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);

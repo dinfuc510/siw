@@ -42,9 +42,11 @@
 #define TITLEBAR_HEIGHT 32
 #define TITLE_POS_X 16
 #define CAPTION_MENU_WIDTH 46
+#define CAPTION_ICON_SIZE 10
 #define LEFT_PADDING 8
 #define SYSMENU_HIGHLIGHT_SIZE					4
 #define SYSMENU_HIGHLIGHT_BORDER_WIDTH 			1
+#define BORDER_WIDTH 1
 
 typedef enum CaptionButton {
 	CaptionButton_None,
@@ -251,23 +253,23 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	GetWindowRect(hwnd, &rect);
 	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
-	const int border_width = is_maximized ? 0 : 1;
+	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
 	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; //bgr 0x4f4f4f 0x2f2f2f 0xb16300
 	static unsigned long border_color = 0x4f4f4f;
 	static unsigned long background_color = 0x1e1e1e;				//0x0c0c0c
 	const unsigned long foreground_color = has_focus ? 0xffffff : 0x7f7f7f;
 
 	{
-		dr_rect(hdc, 0, TITLEBAR_HEIGHT, window_size.cx, window_size.cy - TITLEBAR_HEIGHT, background_color);
-		dr_line(hdc, 0, window_size.cy, window_size.cx, window_size.cy, border_width*2, border_color);
-		dr_line(hdc, 0, TITLEBAR_HEIGHT, 0,	window_size.cy, border_width*2, border_color);
-		dr_line(hdc, window_size.cx, TITLEBAR_HEIGHT, window_size.cx, window_size.cy, border_width*2, border_color);
+		dr_rect(hdc, border_width, TITLEBAR_HEIGHT, window_size.cx - border_width*2, window_size.cy - TITLEBAR_HEIGHT - border_width, background_color);
+		dr_line(hdc, 0, window_size.cy - border_width/2 - (border_width&1), window_size.cx, window_size.cy - border_width/2-(border_width&1), border_width, border_color);
+		dr_line(hdc, 0, TITLEBAR_HEIGHT, 0, window_size.cy, border_width*2, border_color);
+		dr_line(hdc, window_size.cx - border_width/2-(border_width&1), TITLEBAR_HEIGHT, window_size.cx - border_width/2-(border_width&1), window_size.cy, border_width, border_color);
 	}
 	{
-		dr_rect(hdc, 0, 0, window_size.cx, TITLEBAR_HEIGHT, title_bar_color);
+		dr_rect(hdc, border_width, border_width, window_size.cx - border_width*2 - CAPTION_MENU_WIDTH*3, TITLEBAR_HEIGHT - border_width, title_bar_color);
 		dr_line(hdc, 0, 0, window_size.cx, 0, border_width*2, border_color);
 		dr_line(hdc, 0, 0, 0, TITLEBAR_HEIGHT, border_width*2, border_color);
-		dr_line(hdc, window_size.cx, 0, window_size.cx, TITLEBAR_HEIGHT, border_width*2, border_color);
+		dr_line(hdc, window_size.cx - border_width/2-(border_width&1), 0, window_size.cx - border_width/2-(border_width&1), TITLEBAR_HEIGHT, border_width, border_color);
 	}
 
 	int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
@@ -283,7 +285,7 @@ static void on_draw(HWND hwnd, HDC hdc) {
 			sysmenu_icon = LoadIcon(NULL, IDI_APPLICATION);
 		}
 		assert(sysmenu_icon != NULL && "ERROR: could not load sysmenu icon");
-		dr_rect(hdc, left_padding - SYSMENU_HIGHLIGHT_SIZE, border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2+1,	// why 1?
+		dr_rect(hdc, left_padding - SYSMENU_HIGHLIGHT_SIZE, border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2+1,		// why 1?
 				sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2-1, sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2-1*3, sysmenu_color);										//
 		HBRUSH hbr = CreateSolidBrush(sysmenu_color);
 		DrawIconEx(hdc, left_padding, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size.cy/2, sysmenu_icon,
@@ -305,7 +307,7 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	const SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
 	int right_padding = window_size.cx - border_width - button_size.cx;
 	POINT button_center = { right_padding + button_size.cx/2, border_width + button_size.cy/2 };
-	const int caption_icon_size = 10;
+	const int caption_icon_size = CAPTION_ICON_SIZE;
 	{
 		const unsigned long close_button_color = cur_hovered_button == CaptionButton_Close ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Close ? 0x2311e8 : title_bar_color);
@@ -365,13 +367,19 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	const bool is_maximized = IsZoomed(hwnd);
 	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
-	const int border_width = is_maximized ? 0 : 1;
+	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
 	const SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
-	const int left_padding = (LEFT_PADDING > border_width*2 + SYSMENU_HIGHLIGHT_SIZE ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
-	const RECT sysmenu_clickable_rect = { left_padding, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size.cy/2,
-										left_padding+sysmenu_size.cx, border_width + (TITLEBAR_HEIGHT-border_width)/2 + sysmenu_size.cy/2 };
-	const RECT sysmenu_paint_rect = { sysmenu_clickable_rect.left-SYSMENU_HIGHLIGHT_SIZE+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2, sysmenu_clickable_rect.top-(sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2+1+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2,
-									sysmenu_clickable_rect.right+SYSMENU_HIGHLIGHT_SIZE-1+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2, sysmenu_clickable_rect.bottom+SYSMENU_HIGHLIGHT_SIZE-1*3+sysmenu_size.cy/2 };
+	const int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
+	// const RECT sysmenu_clickable_rect = { left_padding, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size.cy/2,
+	// 									left_padding+sysmenu_size.cx, border_width + (TITLEBAR_HEIGHT-border_width)/2 + sysmenu_size.cy/2 };
+	// const RECT sysmenu_paint_rect = { sysmenu_clickable_rect.left-SYSMENU_HIGHLIGHT_SIZE+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2, sysmenu_clickable_rect.top-(sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2+1+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2,
+	// 								sysmenu_clickable_rect.right+SYSMENU_HIGHLIGHT_SIZE-1+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2, sysmenu_clickable_rect.bottom+SYSMENU_HIGHLIGHT_SIZE-1*3+sysmenu_size.cy/2 };
+	RECT sysmenu_paint_rect = {
+		.left = left_padding-SYSMENU_HIGHLIGHT_SIZE+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2 - 1,
+		.top = border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2+1+SYSMENU_HIGHLIGHT_BORDER_WIDTH/2-1,
+	};
+	sysmenu_paint_rect.right = sysmenu_paint_rect.left + sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2;
+	sysmenu_paint_rect.bottom = sysmenu_paint_rect.top + sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2-1*2;
 	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
 	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
 	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
@@ -401,7 +409,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					GetWindowRect(dummy, &dummy_rect);
 					DestroyWindow(dummy);
 				}
-				UnregisterClass("DWindow", g_hmodule);
+				// UnregisterClass("DWindow", g_hmodule);
 			}
 
 			if (rect.left <= 0) {
@@ -604,10 +612,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			if (!is_mouse_leave) {
 				set_is_mouse_leave(hwnd, true);
 				if (cur_hovered_button != CaptionButton_None) {
-					InvalidateRect(hwnd, &close_button_paint_rect, false);
-			        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
-			        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
-			        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
+					// InvalidateRect(hwnd, &close_button_paint_rect, false);
+			        // InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+			        // InvalidateRect(hwnd, &maximize_button_paint_rect, false);
+			        // InvalidateRect(hwnd, &sysmenu_paint_rect, false);
+			        InvalidateRect(hwnd, &title_bar_rect, false);
 					set_caption_button(hwnd, CaptionButton_None);
 				}
 			}
@@ -633,10 +642,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 
 			if (new_hovered_button != cur_hovered_button) {
-				InvalidateRect(hwnd, &close_button_paint_rect, false);
-		        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
-		        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
-		        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
+				// InvalidateRect(hwnd, &close_button_paint_rect, false);
+		        // InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+		        // InvalidateRect(hwnd, &maximize_button_paint_rect, false);
+		        // InvalidateRect(hwnd, &sysmenu_paint_rect, false);
+		        InvalidateRect(hwnd, &title_bar_rect, false);
 		        set_caption_button(hwnd, new_hovered_button);
 			}
 			break;
@@ -780,6 +790,6 @@ int main(void)
 		DispatchMessage(&msg);
 	}
 
-	UnregisterClass("SWindow", g_hmodule);
+	// UnregisterClass("SWindow", g_hmodule);
 	return 0;
 }

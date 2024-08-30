@@ -234,7 +234,7 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	{
 		const unsigned long maximize_button_color = cur_hovered_button == CaptionButton_Maximize ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Maximize ? 0x1a1a1a : title_bar_color);
-		HPEN pen = CreatePen(PS_SOLID, border_width, maximize_button_color);
+		HPEN pen = CreatePen(PS_SOLID, 1, maximize_button_color);
 		HPEN oldpen = (HPEN) SelectObject(hdc, pen);
 		SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
 		if (is_maximized) {
@@ -319,10 +319,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			if (uxtheme != NULL) {
 				FARPROC SetWindowTheme = GetProcAddress(uxtheme, "SetWindowTheme");
 				if (SetWindowTheme != NULL) {
-					SetWindowTheme(hwnd, NULL, NULL);					// turn off theme
+					SetWindowTheme(hwnd, " ", " ");					// turn off theme
 				}
 			}
-
 
 			(void) GetSystemMenu(hwnd, false);		// trigger the program create system menu
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
@@ -435,9 +434,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag
 		case WM_NCCALCSIZE: {
 			if (wparam == true) {
-				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
-				params->rgrc[0].right -= border_width;
-				params->rgrc[0].bottom -= border_width;
+				// NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
+				// params->rgrc[0].right -= border_width;
+				// params->rgrc[0].bottom -= border_width;
 				return WVR_VALIDRECTS;			// make the resize smoothly
 			}
 			return 0;							// disable default behaviour
@@ -449,11 +448,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			if (wparam == SIZE_MAXIMIZED) {
 				MONITORINFO mi;
 				mi.cbSize = sizeof(MONITORINFO);
-			    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+			    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
 					SetWindowPos(hwnd, HWND_TOP,
-								mi.rcMonitor.left, mi.rcMonitor.top,
-								mi.rcMonitor.right - mi.rcMonitor.left,
-								mi.rcMonitor.bottom - mi.rcMonitor.top - 1,	// -1 for not overlap the taskbar (fullscreen)
+								mi.rcWork.left, mi.rcWork.top,
+								mi.rcWork.right - mi.rcWork.left,
+								mi.rcWork.bottom - mi.rcWork.top - 1,	// -1 for not overlap the taskbar (fullscreen)
 								SWP_FRAMECHANGED);
 				}
 			}
@@ -686,15 +685,15 @@ int main(void)
 	}
 
 	HWND window = CreateWindowEx(0 /*| WS_EX_TOOLWINDOW*/, "SWindow", "Simple Window",
-		WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU,
-		0, 0, 700, 500, NULL, NULL, g_hmodule, NULL);
+		WS_OVERLAPPED | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU,
+		CW_USEDEFAULT, CW_USEDEFAULT, 700, 500, NULL, NULL, g_hmodule, NULL);
 	// EnableMenuItem(GetSystemMenu(window, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 	if (window == NULL) {
 		fprintf(stderr, "ERROR: could not create window: %ld\n", GetLastError());
 		UnregisterClass("Window", g_hmodule);
 		return 1;
 	}
-	SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+	// SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 	ShowWindow(window, SW_SHOW);
 
 	// https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513

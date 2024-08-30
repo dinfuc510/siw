@@ -1,5 +1,5 @@
 #ifndef _WIN32_WINNT
-	#define _WIN32_WINNT 	0x0400	// _WIN32_WINNT_NT4 (Windows NT 4.0)
+	#define _WIN32_WINNT 	0x0500	// _WIN32_WINNT_WIN2K (Windows 2000)
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -12,11 +12,11 @@
 #include "message.c"
 #endif
 
-#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0400
-	#error "ERROR: _WIN32_WINNT must be defined and at least 0x0400"
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0500
+	#error "ERROR: _WIN32_WINNT must be defined and at least 0x0500"
 	/*
 		...
-		#define _WIN32_WINNT 0x0400
+		#define _WIN32_WINNT 0x0500
 		#include <windows.h>
 		...
 	*/
@@ -271,9 +271,6 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		if (sysmenu_icon == NULL) {
 			sysmenu_icon = (HICON) GetClassLongPtr(hwnd, GCLP_HICONSM);
 		}
-		if (sysmenu_icon == NULL) {
-			sysmenu_icon = (HICON) GetClassLongPtr(hwnd, GCLP_HICON);
-		}
 #endif
 		if (sysmenu_icon == NULL) {
 			sysmenu_icon = LoadIcon(NULL, IDI_APPLICATION);
@@ -375,22 +372,12 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	sysmenu_paint_rect.right = sysmenu_paint_rect.left + sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2;
 	sysmenu_paint_rect.bottom = sysmenu_paint_rect.top + sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2;
 	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
-	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
 	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
 											window_size.cx - border_width, TITLEBAR_HEIGHT };
 	RECT maximize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&maximize_button_paint_rect, -CAPTION_MENU_WIDTH, 0);
 	RECT minimize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&minimize_button_paint_rect, -CAPTION_MENU_WIDTH*2, 0);
-
-	const int border_check_sensitivity = is_maximized ? 0 : 4;
-	RECT close_button_border_check = close_button_paint_rect;
-	close_button_border_check.top += border_check_sensitivity;
-	close_button_border_check.right -= border_check_sensitivity;
-	RECT maximize_button_border_check = maximize_button_paint_rect;
-	maximize_button_border_check.top += border_check_sensitivity;
-	RECT minimize_button_border_check = minimize_button_paint_rect;
-	minimize_button_border_check.top += border_check_sensitivity;
 
 #ifdef DEBUG
 	if (print_message) {
@@ -457,6 +444,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return 0;
 	    }
 		case WM_NCACTIVATE: {
+			// redraw take too long when hold inactive titlebar
 			lparam = -1;
 			return true;
 		}
@@ -489,9 +477,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			DeleteObject(memdc);
 #endif
 			EndPaint(hwnd, &ps);
-			break;
+			return 0;
 		}
 		case WM_NCHITTEST: {
+			const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
+			const int border_check_sensitivity = is_maximized ? 0 : 4;
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
 			const int border_width_check = border_width + border_check_sensitivity;
 
@@ -522,6 +512,13 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				}
 			}
 			if (mouse.y < TITLEBAR_HEIGHT) {
+				RECT close_button_border_check = close_button_paint_rect;
+				close_button_border_check.top += border_check_sensitivity;
+				close_button_border_check.right -= border_check_sensitivity;
+				RECT maximize_button_border_check = maximize_button_paint_rect;
+				maximize_button_border_check.top += border_check_sensitivity;
+				RECT minimize_button_border_check = minimize_button_paint_rect;
+				minimize_button_border_check.top += border_check_sensitivity;
 				if (PtInRect(&sysmenu_paint_rect, mouse)) {
 					return HTSYSMENU;
 				}
@@ -571,39 +568,14 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 							SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOCOPYBITS);
 			}
 			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
-			InvalidateRect(hwnd, NULL, false);
+			// InvalidateRect(hwnd, NULL, false);
 			break;
 		}
-		// https://github.com/reactos/reactos/blob/48a0d8e012f77b5d7fb11d58141e1fdd5de27254/base/applications/taskmgr/taskmgr.c#L413
-		case WM_SIZING: {
-			RECT *drag_rect = (RECT*) lparam;
-			SIZE drag_rect_size = { drag_rect->right - drag_rect->left,
-									drag_rect->bottom - drag_rect->top };
-			const int minimum_width = CAPTION_MENU_WIDTH*3 + border_width*2 + sysmenu_paint_rect.right;
-			const int minimum_height = TITLEBAR_HEIGHT;
-
-			if (wparam == WMSZ_LEFT || wparam == WMSZ_TOPLEFT || wparam == WMSZ_BOTTOMLEFT) {
-				if (drag_rect_size.cx < minimum_width) {
-					drag_rect->left = drag_rect->right - minimum_width;
-				}
-			}
-			if (wparam == WMSZ_RIGHT || wparam == WMSZ_TOPRIGHT || wparam == WMSZ_BOTTOMRIGHT) {
-				if (drag_rect_size.cx < minimum_width) {
-					drag_rect->right = drag_rect->left + minimum_width;
-				}
-			}
-			if (wparam == WMSZ_TOP || wparam == WMSZ_TOPLEFT || wparam == WMSZ_TOPRIGHT) {
-				if (drag_rect_size.cy < minimum_height) {
-					drag_rect->top = drag_rect->bottom - minimum_height;
-				}
-			}
-			if (wparam == WMSZ_BOTTOM || wparam == WMSZ_BOTTOMLEFT || wparam == WMSZ_BOTTOMRIGHT) {
-				if (drag_rect_size.cy < minimum_height) {
-					drag_rect->bottom = drag_rect->top + minimum_height;
-				}
-			}
-
-			return true;
+		case WM_GETMINMAXINFO: {
+			MINMAXINFO *mmi = (MINMAXINFO*) lparam;
+			mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2 + sysmenu_paint_rect.right;
+			mmi->ptMinTrackSize.y = TITLEBAR_HEIGHT + border_width*2;
+			break;
 		}
 		case WM_MOUSEMOVE: {
 			if (GetCapture()) {
@@ -734,6 +706,34 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			ReleaseCapture();
 			break;
 		}
+		case WM_SYSCOMMAND: {
+			int request = (wparam & 0xFFF0);
+			bool display_menu = false;
+			if (request == SC_KEYMENU) {
+	        	char key_stroke = (char) lparam;
+            	// printf("%c\n", key_stroke);
+	        	if (key_stroke == ' ') {
+	        		display_menu = true;
+	        	}
+	        }
+	        else if (request == SC_MOUSEMENU) {
+	        	display_menu = true;
+	        }
+
+            if (display_menu) {
+	            HMENU hmenu = GetSystemMenu(hwnd, false);
+				if (hmenu != NULL) {
+					int cmd = TrackPopupMenuEx(hmenu,
+							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
+							rect.left, rect.top+TITLEBAR_HEIGHT, hwnd, NULL);
+					if (cmd != 0) {
+						PostMessage(hwnd, WM_SYSCOMMAND, cmd, 0);
+					}
+				}
+	            return 0;
+	        }
+			break;
+		}
 		case WM_INITMENUPOPUP: {
 			bool is_system_menu = HIWORD(lparam);
 			HMENU hmenu = (HMENU) wparam;
@@ -755,13 +755,14 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
-		case WM_WINDOWPOSCHANGED:
 		// case WM_WINDOWPOSCHANGING:
+		case WM_WINDOWPOSCHANGED:
 		{
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-			printf("0x%04x\n", wpos->flags);
-			// wpos->flags |= SWP_NOCOPYBITS;					// cause unnecessary redraw when moving
-			if ((wpos->flags & (SWP_NOSIZE | SWP_NOZORDER)) && !(wpos->flags & SWP_NOMOVE)) {
+			if (!(wpos->flags & SWP_NOSIZE)) {
+				InvalidateRect(hwnd, NULL, true);
+			}
+			if ((wpos->flags & SWP_NOSIZE) && !(wpos->flags & SWP_NOMOVE) && (wpos->flags & SWP_NOZORDER)) {
 				SetCursor(LoadCursor(NULL, IDC_SIZEALL));
 			}
 			break;

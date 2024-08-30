@@ -49,21 +49,43 @@ void dr_rect(HDC hdc, int x, int y, int w, int h, unsigned long color) {
 // https://learn.microsoft.com/en-us/windows/apps/design/style/xaml-theme-resources#the-xaml-type-ramp
 // font style: (12px, normal)
 // align: left(x), center(y)
-int dr_caption(HDC hdc, const char *text, int length, POINT pos, int bounds_height, unsigned long color) {
-	HFONT hfont = CreateFont(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, TEXT("Segoe UI"));
+int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long color) {
+	static int font_size = 12;
+	const char *font_family = "Segoe UI";
+	HFONT hfont = CreateFont(-font_size, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+							DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+							DEFAULT_QUALITY, DEFAULT_PITCH, font_family);
 	HGDIOBJ oldfont = SelectObject(hdc, hfont);
+
 	SIZE text_size_px;
 	GetTextExtentPoint32(hdc, text, length, &text_size_px);
+	int ellipsis_width_px = 0;
+	if (text_size_px.cx > bounds.right - bounds.left) {
+		SIZE ellipsis_size_px;
+		GetTextExtentPoint32(hdc, "...", 3, &ellipsis_size_px);
+		ellipsis_width_px = ellipsis_size_px.cx;
+		// TODO: use binary search concept to find the length faster
+		while (text_size_px.cx + ellipsis_width_px > bounds.right - bounds.left && length > 1) {
+			length--;
+			GetTextExtentPoint32(hdc, text, length, &text_size_px);
+		}
+	}
+	bounds.right = bounds.left + text_size_px.cx;
 
 	SetTextColor(hdc, color);
-	ExtTextOut(hdc, pos.x, pos.y + bounds_height/2 - text_size_px.cy/2, ETO_CLIPPED | ETO_OPAQUE,
-				&(RECT) { pos.x, pos.y, pos.x + text_size_px.cx, pos.y + bounds_height },
-				text, length, NULL);
+	ExtTextOut(hdc, bounds.left, (bounds.top + bounds.bottom)/2 - text_size_px.cy/2,
+				ETO_CLIPPED | ETO_OPAQUE, &bounds, text, length, NULL);
+	if (ellipsis_width_px > 0) {
+		bounds.left += text_size_px.cx;
+		bounds.right = bounds.left + ellipsis_width_px;
+		ExtTextOut(hdc, bounds.left, (bounds.top + bounds.bottom)/2 - text_size_px.cy/2,
+				ETO_CLIPPED | ETO_OPAQUE, &bounds, "...", 3, NULL);
+	}
 
 	SelectObject(hdc, oldfont);
 	DeleteObject(hfont);
 
-	return text_size_px.cx;
+	return text_size_px.cx + ellipsis_width_px;
 }
 
 static void on_draw(HWND hwnd, HDC hdc) {
@@ -72,26 +94,26 @@ static void on_draw(HWND hwnd, HDC hdc) {
 
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const SIZE size = { rect.right - rect.left, rect.bottom - rect.top };
+	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
 	const bool is_maximized = IsZoomed(hwnd);
 	const int border_width = is_maximized ? 0 : 1;
 	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; //bgr 0x4f4f4f 0x2f2f2f 0xb16300
-	const unsigned long border_color = 0x4f4f4f;
-	const unsigned long background_color = 0x1e1e1e;					//0x0c0c0c
+	static unsigned long border_color = 0x4f4f4f;
+	static unsigned long background_color = 0x1e1e1e;				//0x0c0c0c
 	const unsigned long foreground_color = has_focus ? 0xffffff : 0x7f7f7f;
 
 	{
-		dr_rect(hdc, border_width, TITLEBAR_HEIGHT, size.cx - border_width*2, size.cy - TITLEBAR_HEIGHT - border_width, background_color);
-		dr_line(hdc, 0, size.cy - border_width, size.cx, size.cy - border_width, border_width, border_color);
-		dr_line(hdc, 0, TITLEBAR_HEIGHT, 0, size.cy, border_width, border_color);
-		dr_line(hdc, size.cx - border_width, TITLEBAR_HEIGHT, size.cx - border_width, size.cy, border_width, border_color);
+		dr_rect(hdc, border_width, TITLEBAR_HEIGHT, window_size.cx - border_width*2, window_size.cy - TITLEBAR_HEIGHT - border_width, background_color);
+		dr_line(hdc, 0, window_size.cy - border_width, window_size.cx, window_size.cy - border_width, border_width, border_color);
+		dr_line(hdc, 0, TITLEBAR_HEIGHT, 0, window_size.cy, border_width, border_color);
+		dr_line(hdc, window_size.cx - border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy, border_width, border_color);
 	}
 	{
-		dr_rect(hdc, border_width, border_width, size.cx - border_width*2 - CAPTION_MENU_WIDTH*3, TITLEBAR_HEIGHT - border_width, title_bar_color);
-		dr_line(hdc, 0, 0, size.cx, 0, border_width, border_color);
+		dr_rect(hdc, border_width, border_width, window_size.cx - border_width*2 - CAPTION_MENU_WIDTH*3, TITLEBAR_HEIGHT - border_width, title_bar_color);
+		dr_line(hdc, 0, 0, window_size.cx, 0, border_width, border_color);
 		dr_line(hdc, 0, 0, 0, TITLEBAR_HEIGHT, border_width, border_color);
-		dr_line(hdc, size.cx - border_width, 0, size.cx - border_width, TITLEBAR_HEIGHT, border_width, border_color);
+		dr_line(hdc, window_size.cx - border_width, 0, window_size.cx - border_width, TITLEBAR_HEIGHT, border_width, border_color);
 	}
 
 	int left_padding = LEFT_PADDING;
@@ -99,7 +121,8 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	{
 		HICON icon = LoadIcon(NULL, IDI_APPLICATION);
 		assert(icon != NULL && "ERROR: could not load icon");
-		DrawIconEx(hdc, left_padding + icon_size/2, border_width + icon_size/2, icon, icon_size, icon_size, 0, NULL, DI_NORMAL | DI_COMPAT);
+		DrawIconEx(hdc, left_padding + icon_size/2, (TITLEBAR_HEIGHT-border_width)/2 - icon_size/2,
+					icon, icon_size, icon_size, 0, NULL, DI_NORMAL | DI_COMPAT);
 		DeleteObject(icon);
 		left_padding += icon_size*2;
 	}
@@ -107,10 +130,10 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		const int length = GetWindowTextLength(hwnd) + 1;
 		char text[MAX_PATH];
 		GetWindowText(hwnd, text, length);
-		left_padding += dr_caption(hdc, text, length, (POINT){ left_padding, border_width }, TITLEBAR_HEIGHT - border_width, foreground_color);
+		left_padding += dr_caption(hdc, text, length, (RECT){ left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
 	}
 
-	int right_padding = size.cx - border_width - CAPTION_MENU_WIDTH;
+	int right_padding = window_size.cx - border_width - CAPTION_MENU_WIDTH;
 	const SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
 	POINT button_center = { right_padding + button_size.cx/2, border_width + button_size.cy/2 };
 	const int caption_icon_size = 10;
@@ -165,20 +188,23 @@ bool track_mouse_move(HWND hwnd) {
 static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const SIZE size = { rect.right - rect.left, rect.bottom - rect.top };
+	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 	const CaptionMenu cur_hovered_button = (CaptionMenu) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	const int border_width = IsZoomed(hwnd) ? 0 : 1;
-	const RECT icon_rect = { LEFT_PADDING, border_width, GetSystemMetrics(SM_CXSMICON)*2, TITLEBAR_HEIGHT };
-	const RECT title_bar_rect = { border_width, border_width, size.cx - border_width, TITLEBAR_HEIGHT };
-	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, size.cx - border_width, size.cy - border_width*2 };
-	const RECT close_button_paint_rect = { size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
-									size.cx - border_width, TITLEBAR_HEIGHT };
+	const int icon_size = GetSystemMetrics(SM_CXSMICON);
+	// const RECT icon_rect = { LEFT_PADDING, border_width, icon_size*2, TITLEBAR_HEIGHT };
+	const RECT icon_clickable_rect = { LEFT_PADDING+icon_size/2, (TITLEBAR_HEIGHT-border_width)/2 - icon_size/2,
+										LEFT_PADDING+icon_size*3/2, (TITLEBAR_HEIGHT-border_width)/2 + icon_size/2 };
+	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
+	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width*2 };
+	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
+											window_size.cx - border_width, TITLEBAR_HEIGHT };
 	RECT maximize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&maximize_button_paint_rect, -CAPTION_MENU_WIDTH, 0);
 	RECT minimize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&minimize_button_paint_rect, -CAPTION_MENU_WIDTH*2, 0);
 
-	const int border_check_sensitivity = 4;
+	static int border_check_sensitivity = 4;
 	RECT close_button_border_check = close_button_paint_rect;
 	close_button_border_check.top += border_check_sensitivity;
 	close_button_border_check.right -= border_check_sensitivity;
@@ -191,7 +217,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 	switch(msg) {
 		case WM_CREATE: {
-			SetWindowPos(hwnd, NULL, rect.left, rect.top, size.cx, size.cy,
+			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
 						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
 	        break;
 		}
@@ -246,30 +272,30 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				if (mouse.x < border_width_check && mouse.y < border_width_check) {
 					return HTTOPLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width_check && mouse.y < border_width_check) {
+				else if (mouse.x >= window_size.cx - border_width_check && mouse.y < border_width_check) {
 					return HTTOPRIGHT;
 				}
-				else if (mouse.x < border_width_check && mouse.y >= size.cy - border_width_check) {
+				else if (mouse.x < border_width_check && mouse.y >= window_size.cy - border_width_check) {
 					return HTBOTTOMLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width_check && mouse.y >= size.cy - border_width_check) {
+				else if (mouse.x >= window_size.cx - border_width_check && mouse.y >= window_size.cy - border_width_check) {
 					return HTBOTTOMRIGHT;
 				}
 				else if (mouse.y < border_width_check) {
 					return HTTOP;
 				}
-				else if (mouse.y >= size.cy - border_width_check) {
+				else if (mouse.y >= window_size.cy - border_width_check) {
 					return HTBOTTOM;
 				}
 				else if (mouse.x < border_width_check) {
 					return HTLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width_check) {
+				else if (mouse.x >= window_size.cx - border_width_check) {
 					return HTRIGHT;
 				}
 			}
 			if (mouse.y < TITLEBAR_HEIGHT) {
-				if (PtInRect(&icon_rect, mouse)) {
+				if (PtInRect(&icon_clickable_rect, mouse)) {
 					return HTSYSMENU;
 				}
 				else if (PtInRect(&close_button_border_check, mouse)) {
@@ -311,8 +337,40 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
 							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 			}
-			RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+			InvalidateRect(hwnd, NULL, false);
 			break;
+		}
+		// https://github.com/reactos/reactos/blob/48a0d8e012f77b5d7fb11d58141e1fdd5de27254/base/applications/taskmgr/taskmgr.c#L413
+		case WM_SIZING: {
+			RECT *drag_rect = (RECT*) lparam;
+			SIZE drag_rect_size = { drag_rect->right - drag_rect->left,
+									drag_rect->bottom - drag_rect->top };
+			const int minimum_width = CAPTION_MENU_WIDTH*3 + border_width*2 + icon_size*2;
+			const int minimum_height = TITLEBAR_HEIGHT;
+
+			if (wparam == WMSZ_LEFT || wparam == WMSZ_TOPLEFT || wparam == WMSZ_BOTTOMLEFT) {
+				if (drag_rect_size.cx < minimum_width) {
+					drag_rect->left = drag_rect->right - minimum_width;
+				}
+			}
+			if (wparam == WMSZ_RIGHT || wparam == WMSZ_TOPRIGHT || wparam == WMSZ_BOTTOMRIGHT) {
+				if (drag_rect_size.cx < minimum_width) {
+					drag_rect->right = drag_rect->left + minimum_width;
+				}
+			}
+			if (wparam == WMSZ_TOP || wparam == WMSZ_TOPLEFT || wparam == WMSZ_TOPRIGHT) {
+				if (drag_rect_size.cy < minimum_height) {
+					drag_rect->top = drag_rect->bottom - minimum_height;
+				}
+			}
+			if (wparam == WMSZ_BOTTOM || wparam == WMSZ_BOTTOMLEFT || wparam == WMSZ_BOTTOMRIGHT) {
+				if (drag_rect_size.cy < minimum_height) {
+					drag_rect->bottom = drag_rect->top + minimum_height;
+				}
+			}
+
+			return true;
 		}
 		case WM_MOUSEMOVE: {
 			if (cur_hovered_button != CaptionButton_None) {
@@ -408,6 +466,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					EnableMenuItem(hmenu, SC_MAXIMIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
 					EnableMenuItem(hmenu, SC_RESTORE, !IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
 					EnableMenuItem(hmenu, SC_SIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
+					EnableMenuItem(hmenu, SC_MOVE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
 
 					int cmd = TrackPopupMenuEx(hmenu, TPM_LEFTALIGN | TPM_RETURNCMD,
 												mouse.x, mouse.y, hwnd, NULL);
@@ -418,12 +477,12 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			return 0;
 		}
-		case WM_GETMINMAXINFO: {
-		    MINMAXINFO* mmi = (MINMAXINFO*) lparam;
-		    mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2;
-		    mmi->ptMinTrackSize.y = TITLEBAR_HEIGHT;
-		    return 0;
-		}
+		// case WM_GETMINMAXINFO: {
+		//     MINMAXINFO* mmi = (MINMAXINFO*) lparam;
+		//     mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2;
+		//     mmi->ptMinTrackSize.y = TITLEBAR_HEIGHT;
+		//     return 0;
+		// }
 	}
 
 	return DefWindowProc(hwnd, msg, wparam, lparam);

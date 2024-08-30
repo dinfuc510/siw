@@ -33,8 +33,10 @@ void dr_line(HDC hdc, int x1, int y1, int x2, int y2, int border_width, unsigned
 	}
 	HPEN pen = CreatePen(PS_SOLID, border_width, color);
 	HPEN oldpen = (HPEN) SelectObject(hdc, pen);
-	MoveToEx(hdc, x1, y1, NULL);
+	POINT old_point;
+	MoveToEx(hdc, x1, y1, &old_point);
 	LineTo(hdc, x2, y2);
+	MoveToEx(hdc, old_point.x, old_point.y, NULL);
 	SelectObject(hdc, oldpen);
 	DeleteObject(pen);
 }
@@ -204,7 +206,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 				}
 			}
-			InvalidateRect(hwnd, &title_bar_rect, FALSE);
+			InvalidateRect(hwnd, &title_bar_rect, false);
 			return 0;
 	    }
 		case WM_PAINT: {
@@ -214,16 +216,22 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 #if !defined(DOUBLE_BUFFERING)
 			on_draw(hwnd, hdc);
 #else
+			// https://www.codeproject.com/articles/617212/custom-controls-in-win-api-the-painting
+			const int cx = ps.rcPaint.right - ps.rcPaint.left, cy = ps.rcPaint.bottom - ps.rcPaint.top;
 			HDC memdc = CreateCompatibleDC(hdc);
-			HBITMAP membmp = CreateCompatibleBitmap(hdc, size.cx, size.cy);
+			HBITMAP membmp = CreateCompatibleBitmap(hdc, cx, cy);
 			assert(memdc != NULL && "ERROR: could not create the memory device context\n");
 			assert(membmp != NULL && "ERROR: could not create the memory bitmap\n");
 
 			HGDIOBJ oldbmp = SelectObject(memdc, membmp);
+			POINT old_point;
+			OffsetViewportOrgEx(memdc, -ps.rcPaint.left, -ps.rcPaint.top, &old_point);
 			on_draw(hwnd, memdc);
-			BitBlt(hdc, 0, 0, size.cx, size.cy, memdc, 0, 0, SRCCOPY);
-			SelectObject(memdc, oldbmp);
+			SetViewportOrgEx(memdc, old_point.x, old_point.y, NULL);
+			BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+					cx, cy, memdc, 0, 0, SRCCOPY);
 
+			SelectObject(memdc, oldbmp);
 			DeleteObject(membmp);
 			DeleteObject(memdc);
 #endif
@@ -279,7 +287,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				return HTCLIENT;
 			}
 
-			return HTCLIENT;
+			return HTNOWHERE;
 		}
 		case WM_NCCALCSIZE: {
 			if (wparam) {
@@ -308,7 +316,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_MOUSEMOVE: {
 			if (cur_hovered_button != CaptionButton_None) {
-				InvalidateRect(hwnd, &title_bar_rect, FALSE);
+				InvalidateRect(hwnd, &title_bar_rect, false);
 				SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 			}
 			break;
@@ -317,9 +325,9 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			if (!is_mouse_leave) {
 				is_mouse_leave = true;
 				if (cur_hovered_button != CaptionButton_None) {
-					InvalidateRect(hwnd, &close_button_paint_rect, FALSE);
-			        InvalidateRect(hwnd, &minimize_button_paint_rect, FALSE);
-			        InvalidateRect(hwnd, &maximize_button_paint_rect, FALSE);
+					InvalidateRect(hwnd, &close_button_paint_rect, false);
+			        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+			        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 					SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 				}
 			}
@@ -343,9 +351,9 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 
 			if (new_hovered_button != cur_hovered_button) {
-				InvalidateRect(hwnd, &close_button_paint_rect, FALSE);
-		        InvalidateRect(hwnd, &minimize_button_paint_rect, FALSE);
-		        InvalidateRect(hwnd, &maximize_button_paint_rect, FALSE);
+				InvalidateRect(hwnd, &close_button_paint_rect, false);
+		        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+		        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 		        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) new_hovered_button);
 			}
 			break;
@@ -370,7 +378,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_NCLBUTTONUP: {
 			if (cur_hovered_button == CaptionButton_Close) {
-				PostMessageW(hwnd, WM_CLOSE, 0, 0);
+				PostMessage(hwnd, WM_CLOSE, 0, 0);
 				return 0;
 			}
 			else if (cur_hovered_button == CaptionButton_Minimize) {
@@ -382,6 +390,39 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				return 0;
 			}
 			break;
+		}
+		case WM_NCRBUTTONDOWN: {
+			if (wparam == HTCAPTION) {
+				// HMENU hmenu = CreatePopupMenu();
+				// if (hmenu != NULL) {
+				// 	POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+
+				// 	AppendMenu(hmenu, MF_STRING, 1, "Item 1");
+				// 	TrackPopupMenuEx(hmenu, TPM_LEFTALIGN, mouse.x, mouse.y, hwnd, NULL);
+				// 	DestroyMenu(hmenu);
+				// }
+
+				HMENU hmenu = GetSystemMenu(hwnd, false);
+				if (hmenu != NULL) {
+					POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+					EnableMenuItem(hmenu, SC_MAXIMIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
+					EnableMenuItem(hmenu, SC_RESTORE, !IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
+					EnableMenuItem(hmenu, SC_SIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
+
+					int cmd = TrackPopupMenuEx(hmenu, TPM_LEFTALIGN | TPM_RETURNCMD,
+												mouse.x, mouse.y, hwnd, NULL);
+					if (cmd != 0) {
+						PostMessage(hwnd, WM_SYSCOMMAND, cmd, 0);
+					}
+				}
+			}
+			return 0;
+		}
+		case WM_GETMINMAXINFO: {
+		    MINMAXINFO* mmi = (MINMAXINFO*) lparam;
+		    mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2;
+		    mmi->ptMinTrackSize.y = TITLEBAR_HEIGHT;
+		    return 0;
 		}
 	}
 
@@ -423,6 +464,7 @@ int main(void)
 	SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 	ShowWindow(window, SW_SHOW);
 
+	// https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513
 	MSG msg;
 	while(GetMessage(&msg, NULL, 0, 0)) {
 		TranslateMessage(&msg);

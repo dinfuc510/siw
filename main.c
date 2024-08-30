@@ -169,12 +169,22 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	const RECT icon_rect = { LEFT_PADDING, border_width, GetSystemMetrics(SM_CXSMICON)*2, TITLEBAR_HEIGHT };
 	const RECT title_bar_rect = { border_width, border_width, size.cx - border_width, TITLEBAR_HEIGHT };
 	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, size.cx - border_width, size.cy - border_width*2 };
-	const RECT close_button_rect = { size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
+	const RECT close_button_paint_rect = { size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
 									size.cx - border_width, TITLEBAR_HEIGHT };
-	RECT maximize_button_rect = close_button_rect;
-	OffsetRect(&maximize_button_rect, -CAPTION_MENU_WIDTH, 0);
-	RECT minimize_button_rect = close_button_rect;
-	OffsetRect(&minimize_button_rect, -CAPTION_MENU_WIDTH*2, 0);
+	RECT maximize_button_paint_rect = close_button_paint_rect;
+	OffsetRect(&maximize_button_paint_rect, -CAPTION_MENU_WIDTH, 0);
+	RECT minimize_button_paint_rect = close_button_paint_rect;
+	OffsetRect(&minimize_button_paint_rect, -CAPTION_MENU_WIDTH*2, 0);
+
+	const int border_check_sensitivity = 4;
+	RECT close_button_border_check = close_button_paint_rect;
+	close_button_border_check.top += border_check_sensitivity;
+	close_button_border_check.right -= border_check_sensitivity;
+	RECT maximize_button_border_check = maximize_button_paint_rect;
+	maximize_button_border_check.top += border_check_sensitivity;
+	RECT minimize_button_border_check = minimize_button_paint_rect;
+	minimize_button_border_check.top += border_check_sensitivity;
+
 	static bool is_mouse_leave = true;
 
 	switch(msg) {
@@ -222,44 +232,45 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_NCHITTEST: {
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
+			const int border_width_check = border_width + border_check_sensitivity;
+
 			if (!IsZoomed(hwnd)) {
-				if (mouse.x < border_width && mouse.y < border_width) {
+				if (mouse.x < border_width_check && mouse.y < border_width_check) {
 					return HTTOPLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width && mouse.y < border_width) {
+				else if (mouse.x >= size.cx - border_width_check && mouse.y < border_width_check) {
 					return HTTOPRIGHT;
 				}
-				else if (mouse.x < border_width && mouse.y >= size.cy - border_width) {
+				else if (mouse.x < border_width_check && mouse.y >= size.cy - border_width_check) {
 					return HTBOTTOMLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width && mouse.y >= size.cy - border_width) {
+				else if (mouse.x >= size.cx - border_width_check && mouse.y >= size.cy - border_width_check) {
 					return HTBOTTOMRIGHT;
 				}
-				else if (mouse.y < border_width) {
+				else if (mouse.y < border_width_check) {
 					return HTTOP;
 				}
-				else if (mouse.y >= size.cy - border_width) {
+				else if (mouse.y >= size.cy - border_width_check) {
 					return HTBOTTOM;
 				}
-				else if (mouse.x < border_width) {
+				else if (mouse.x < border_width_check) {
 					return HTLEFT;
 				}
-				else if (mouse.x >= size.cx - border_width) {
+				else if (mouse.x >= size.cx - border_width_check) {
 					return HTRIGHT;
 				}
 			}
 			if (mouse.y < TITLEBAR_HEIGHT) {
 				if (PtInRect(&icon_rect, mouse)) {
-					printf("HELLO\n");
 					return HTSYSMENU;
 				}
-				else if (PtInRect(&close_button_rect, mouse)) {
+				else if (PtInRect(&close_button_border_check, mouse)) {
 					return HTCLOSE;
 				}
-				else if (PtInRect(&maximize_button_rect, mouse)) {
+				else if (PtInRect(&maximize_button_border_check, mouse)) {
 					return HTMAXBUTTON;
 				}
-				else if (PtInRect(&minimize_button_rect, mouse)) {
+				else if (PtInRect(&minimize_button_paint_rect, mouse)) {
 					return HTMINBUTTON;
 				}
 				return HTCAPTION;
@@ -290,8 +301,7 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			else if (wparam == SIZE_RESTORED) {
 				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-							SWP_FRAMECHANGED);
+							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 			}
 			RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
 			break;
@@ -307,9 +317,9 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			if (!is_mouse_leave) {
 				is_mouse_leave = true;
 				if (cur_hovered_button != CaptionButton_None) {
-					InvalidateRect(hwnd, &close_button_rect, FALSE);
-			        InvalidateRect(hwnd, &minimize_button_rect, FALSE);
-			        InvalidateRect(hwnd, &maximize_button_rect, FALSE);
+					InvalidateRect(hwnd, &close_button_paint_rect, FALSE);
+			        InvalidateRect(hwnd, &minimize_button_paint_rect, FALSE);
+			        InvalidateRect(hwnd, &maximize_button_paint_rect, FALSE);
 					SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 				}
 			}
@@ -322,20 +332,20 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
 			CaptionMenu new_hovered_button = CaptionButton_None;
-			if (PtInRect(&close_button_rect, mouse)) {
+			if (PtInRect(&close_button_border_check, mouse)) {
 				new_hovered_button = CaptionButton_Close;
 			}
-			else if (PtInRect(&maximize_button_rect, mouse)) {
+			else if (PtInRect(&maximize_button_border_check, mouse)) {
 				new_hovered_button = CaptionButton_Maximize;
 			}
-			else if (PtInRect(&minimize_button_rect, mouse)) {
+			else if (PtInRect(&minimize_button_border_check, mouse)) {
 				new_hovered_button = CaptionButton_Minimize;
 			}
 
 			if (new_hovered_button != cur_hovered_button) {
-				InvalidateRect(hwnd, &close_button_rect, FALSE);
-		        InvalidateRect(hwnd, &minimize_button_rect, FALSE);
-		        InvalidateRect(hwnd, &maximize_button_rect, FALSE);
+				InvalidateRect(hwnd, &close_button_paint_rect, FALSE);
+		        InvalidateRect(hwnd, &minimize_button_paint_rect, FALSE);
+		        InvalidateRect(hwnd, &maximize_button_paint_rect, FALSE);
 		        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) new_hovered_button);
 			}
 			break;
@@ -343,13 +353,13 @@ static LRESULT WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_NCLBUTTONDOWN: {
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
 			CaptionMenu clicked_button = CaptionButton_None;
-			if (PtInRect(&close_button_rect, mouse)) {
+			if (PtInRect(&close_button_border_check, mouse)) {
 				clicked_button = CaptionButton_Close;
 			}
-			else if (PtInRect(&maximize_button_rect, mouse)) {
+			else if (PtInRect(&maximize_button_border_check, mouse)) {
 				clicked_button = CaptionButton_Maximize;
 			}
-			else if (PtInRect(&minimize_button_rect, mouse)) {
+			else if (PtInRect(&minimize_button_border_check, mouse)) {
 				clicked_button = CaptionButton_Minimize;
 			}
 			if (clicked_button != CaptionButton_None) {
@@ -402,7 +412,7 @@ int main(void)
 	}
 
 	HWND window = CreateWindowEx(0 /*| WS_EX_TOOLWINDOW*/, "Window", "Simple Window",
-		WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_VISIBLE,
+		WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU,
 		0, 0, 700, 500, NULL, NULL, g_hmodule, NULL);
 	// EnableMenuItem(GetSystemMenu(window, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 	if (window == NULL) {
@@ -411,6 +421,7 @@ int main(void)
 		return 1;
 	}
 	SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+	ShowWindow(window, SW_SHOW);
 
 	MSG msg;
 	while(GetMessage(&msg, NULL, 0, 0)) {

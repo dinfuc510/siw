@@ -1,4 +1,6 @@
-#define _WIN32_WINNT 	0x501
+#ifndef _WIN32_WINNT
+	#define _WIN32_WINNT 	0x0400	// _WIN32_WINNT_NT4 (Windows NT 4.0)
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
@@ -6,12 +8,15 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef DEBUG
+#include "message.c"
+#endif
 
-#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x500
-	#error "ERROR: _WIN32_WINNT must be defined and at least 0x500"
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0400
+	#error "ERROR: _WIN32_WINNT must be defined and at least 0x0400"
 	/*
 		...
-		#define _WIN32_WINNT 0x500
+		#define _WIN32_WINNT 0x0400
 		#include <windows.h>
 		...
 	*/
@@ -48,6 +53,8 @@
 #define SYSMENU_HIGHLIGHT_BORDER_WIDTH 			1
 #define BORDER_WIDTH 1
 
+#define CAPTION_BUTTON_BIT 				0
+#define CAPTION_BUTTON_BIT_LENGTH 		3
 typedef enum CaptionButton {
 	CaptionButton_None,
 	CaptionButton_Close,
@@ -55,6 +62,9 @@ typedef enum CaptionButton {
 	CaptionButton_Minimize,
 	CaptionButton_Sysmenu,
 } CaptionButton;
+
+#define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
+#define IS_MOUSE_LEAVE_BIT_LENGTH 		1
 
 LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char start, unsigned char count) {
 	assert(start + count <= 8*sizeof(LONG_PTR));
@@ -79,11 +89,6 @@ void set_prop(HWND hwnd, unsigned char start, unsigned char count, LONG_PTR valu
 	set_nbits_from_ith(&data, start, count, value);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
-
-#define CAPTION_BUTTON_BIT 				0
-#define CAPTION_BUTTON_BIT_LENGTH 		3
-#define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
-#define IS_MOUSE_LEAVE_BIT_LENGTH 		1
 
 // NOTE: Both bg and fg are in rgb
 unsigned long blend_color(unsigned long bg, unsigned long fg, unsigned char alpha) {
@@ -344,6 +349,7 @@ static bool register_window_class(const char *class, WNDPROC proc) {
 	});
 }
 
+// https://github.com/cwabbott0/wine-hangover/blob/1736d902f713e30e3d46552ca7c790c0836c44d9/dlls/comctl32/button.c#L674
 bool track_mouse_leave(HWND hwnd) {
 	return TrackMouseEvent(&(TRACKMOUSEEVENT) {
 		.cbSize = sizeof(TRACKMOUSEEVENT),
@@ -385,6 +391,20 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	maximize_button_border_check.top += border_check_sensitivity;
 	RECT minimize_button_border_check = minimize_button_paint_rect;
 	minimize_button_border_check.top += border_check_sensitivity;
+
+#ifdef DEBUG
+	if (print_message) {
+		if (msg < messages_len && messages[msg] != NULL) {
+			printf("%s\n", messages[msg]);
+		}
+		else {
+			printf("0x%04x\n", msg);
+		}
+	}
+	if (msg == WM_CHAR && wparam == 'p') {
+		print_message = !print_message;
+	}
+#endif
 
 	switch(msg) {
 		case WM_CREATE: {
@@ -735,12 +755,17 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
-		// case WM_WINDOWPOSCHANGED:				// cause unnecessary redraw when moving
-		// case WM_WINDOWPOSCHANGING: {
-		// 	WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-		// 	wpos->flags |= SWP_NOCOPYBITS;
-		// 	break;
-		// }
+		case WM_WINDOWPOSCHANGED:
+		// case WM_WINDOWPOSCHANGING:
+		{
+			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
+			printf("0x%04x\n", wpos->flags);
+			// wpos->flags |= SWP_NOCOPYBITS;					// cause unnecessary redraw when moving
+			if ((wpos->flags & (SWP_NOSIZE | SWP_NOZORDER)) && !(wpos->flags & SWP_NOMOVE)) {
+				SetCursor(LoadCursor(NULL, IDC_SIZEALL));
+			}
+			break;
+		}
 		case WM_SETTINGCHANGE: {
 			if (wparam == SPI_SETWORKAREA && is_maximized) {
 				set_maximize_window(hwnd);

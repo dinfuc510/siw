@@ -1,6 +1,7 @@
 #define _WIN32_WINNT 	0x500
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -127,6 +128,23 @@ void dr_rect(HDC hdc, int x, int y, int w, int h, unsigned long color) {
 	SetBkColor(hdc, old_color);
 }
 
+void dr_rect_line(HDC hdc, int x, int y, int w, int h, int border_width, unsigned long color) {
+	if (border_width == 0) {
+		return;
+	}
+	HPEN pen = CreatePen(PS_SOLID, border_width, color);
+	HPEN oldpen = (HPEN) SelectObject(hdc, pen);
+	POINT old_point;
+	MoveToEx(hdc, x, y, &old_point);
+	LineTo(hdc, x + w - 1, y);
+	LineTo(hdc, x + w - 1, y + h - 1);
+	LineTo(hdc, x, y + h - 1);
+	LineTo(hdc, x, y);
+	MoveToEx(hdc, old_point.x, old_point.y, NULL);
+	SelectObject(hdc, oldpen);
+	DeleteObject(pen);
+}
+
 // https://learn.microsoft.com/en-us/windows/apps/design/style/xaml-theme-resources#the-xaml-type-ramp
 // font style: (12px, normal)
 // align: left(x), center(y)
@@ -188,20 +206,72 @@ bool is_taskbar_hidden(HWND hwnd) {
 	return false;
 }
 
+// #define DYNLINK
+
+#ifndef DYNLINK
+	#if _MSC_VER && !defined(__INTEL_COMPILER)
+		#pragma comment(lib, "shell32.lib")
+	#endif
+#endif
+
 bool set_maximize_window(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
     if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+		// for not overlap the taskbar (fullscreen)
+#ifdef DYNLINK
+		bool is_load = false;
+		HMODULE shell32 = GetModuleHandle("shell32.dll");
+		if (shell32 == NULL || shell32 == INVALID_HANDLE_VALUE) {
+			shell32 = LoadLibrary("shell32.dll");
+			is_load = true;
+		}
+		if (shell32 != NULL && shell32 != INVALID_HANDLE_VALUE) {
+			FARPROC SHAppBarMessage = GetProcAddress(shell32, "SHAppBarMessage");
+			if (SHAppBarMessage != NULL) {
+#endif
+		    	APPBARDATA abd;
+				abd.cbSize = sizeof(APPBARDATA);
+				abd.uEdge = ABE_BOTTOM;
+				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+					mi.rcWork.bottom -= 1;
+				}
+				abd.uEdge = ABE_RIGHT;
+				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+					mi.rcWork.right -= 1;
+				}
+				abd.uEdge = ABE_TOP;
+				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+					mi.rcWork.top += 1;
+				}
+				abd.uEdge = ABE_LEFT;
+				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+					mi.rcWork.left += 1;
+				}
+#ifdef DYNLINK
+			}
+			else {
+				fprintf(stderr, "WARNING: could not get SHAppBarMessage\n");
+			}
+			if (is_load) {
+				FreeLibrary(shell32);
+			}
+		}
+		else {
+			fprintf(stderr, "WARNING: could not get shell32.dll\n");
+		}
+#endif
 		return SetWindowPos(hwnd, NULL,
 						mi.rcWork.left, mi.rcWork.top,
 						mi.rcWork.right - mi.rcWork.left,
-						mi.rcWork.bottom - mi.rcWork.top - is_taskbar_hidden(hwnd),	// for not overlap the non-autohide-bottom taskbar (fullscreen)
+						mi.rcWork.bottom - mi.rcWork.top,
 						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
 	}
 
 	return false;
 }
 
+// https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613
 static void on_draw(HWND hwnd, HDC hdc) {
 	const bool has_focus = !!GetFocus();
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
@@ -250,7 +320,6 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		DrawIconEx(hdc, left_padding, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size/2, sysmenu_icon,
 				sysmenu_size, sysmenu_size, 0, hbr, DI_NORMAL | DI_COMPAT);
 		DeleteObject(hbr);
-		// DeleteObject(sysmenu_icon);
 		left_padding += sysmenu_size + expand_size + 1;
 	}
 	{
@@ -275,20 +344,15 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	{
 		const unsigned long maximize_button_color = cur_hovered_button == CaptionButton_Maximize ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Maximize ? 0x1a1a1a : title_bar_color);
-		HPEN pen = CreatePen(PS_SOLID, 1, maximize_button_color);
-		HPEN oldpen = (HPEN) SelectObject(hdc, pen);
-		SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
 		if (is_maximized) {
 			int offset = 2;
-			Rectangle(hdc, button_center.x - caption_icon_size/2 + offset, button_center.y - caption_icon_size/2 - offset,
-					button_center.x + caption_icon_size/2 + offset, button_center.y + caption_icon_size/2 - offset);
+			dr_rect_line(hdc, button_center.x - caption_icon_size/2 + offset, button_center.y - caption_icon_size/2 - offset,
+						caption_icon_size, caption_icon_size, 1, maximize_button_color);
 			dr_rect(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2,
 					caption_icon_size, caption_icon_size, cur_hovered_button == CaptionButton_Maximize ? 0x1a1a1a : title_bar_color);
 		}
-		Rectangle(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2,
-					button_center.x + caption_icon_size/2, button_center.y + caption_icon_size/2);
-		SelectObject(hdc, oldpen);
-		DeleteObject(pen);
+		dr_rect_line(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2,
+						caption_icon_size, caption_icon_size, 1, maximize_button_color);
 
 		right_padding -= button_size.cx;
 		button_center.x -= button_size.cx;
@@ -329,7 +393,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
 	const bool is_maximized = IsZoomed(hwnd);
 	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
-	const CaptionButton cur_hovered_button = get_caption_button(hwnd); //(CaptionButton) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
 	const int border_width = is_maximized ? 0 : 1;
 	const int sysmenu_size = GetSystemMetrics(SM_CXSMICON);
 	const RECT sysmenu_clickable_rect = { LEFT_PADDING, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size/2,
@@ -357,13 +421,13 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 	switch(msg) {
 		case WM_CREATE: {
-			HMODULE uxtheme = GetModuleHandle("uxtheme.dll");	// so we dont need to link uxtheme (-luxtheme)
-			if (uxtheme != NULL) {								// also this is optional
-				FARPROC SetWindowTheme = GetProcAddress(uxtheme, "SetWindowTheme");
-				if (SetWindowTheme != NULL) {
-					SetWindowTheme(hwnd, " ", " ");				// turn off theme
-				}
-			}
+			// HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
+			// if (uxtheme != NULL && uxtheme != INVALID_HANDLE_VALUE) {	// also this is optional
+			// 	FARPROC SetWindowTheme = GetProcAddress(uxtheme, "SetWindowTheme");
+			// 	if (SetWindowTheme != NULL) {
+			// 		SetWindowTheme(hwnd, " ", " ");				// turn off theme
+			// 	}
+			// }
 
 			RECT dummy_rect = { 0, 0, 0, 0 };
 			if (register_window_class("DWindow", DefWindowProc)) {
@@ -406,7 +470,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_ACTIVATE: {
 			if (LOWORD(wparam) == WA_INACTIVE) {
 				if (cur_hovered_button != CaptionButton_None) {
-					// SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 					set_caption_button(hwnd, CaptionButton_None);
 				}
 			}
@@ -566,7 +629,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_MOUSEMOVE: {
 			if (cur_hovered_button != CaptionButton_None) {
 				InvalidateRect(hwnd, &title_bar_rect, false);
-				// SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 				set_caption_button(hwnd, CaptionButton_None);
 			}
 			break;
@@ -579,7 +641,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
 			        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 			        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
-					// SetWindowLongPtr(hwnd, GWLP_USERDATA, CaptionButton_None);
 					set_caption_button(hwnd, CaptionButton_None);
 				}
 			}
@@ -610,7 +671,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
 		        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 		        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
-		        // SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) new_hovered_button);
 		        set_caption_button(hwnd, new_hovered_button);
 			}
 			break;
@@ -631,7 +691,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				clicked_button = CaptionButton_Sysmenu;
 			}
 			if (clicked_button != CaptionButton_None) {
-		        // SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) clicked_button);
 		        set_caption_button(hwnd, clicked_button);
 		        if (clicked_button != CaptionButton_Sysmenu) {
 					return 0;		// skip default behaviour of caption buttons except sysmenu
@@ -750,8 +809,6 @@ int main(void)
 		UnregisterClass("Window", g_hmodule);
 		return 1;
 	}
-	// SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-	// ShowWindow(window, SW_SHOW);
 
 	// https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513
 	MSG msg;

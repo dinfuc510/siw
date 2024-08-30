@@ -70,8 +70,6 @@ void set_nbits_from_ith(LONG_PTR *num, unsigned char i, unsigned char n, LONG_PT
 #define CAPTION_BUTTON_BIT_LENGTH 		3
 #define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
 #define IS_MOUSE_LEAVE_BIT_LENGTH 		1
-#define IS_LMOUSE_DOWN_TB_BIT 			(IS_MOUSE_LEAVE_BIT + IS_MOUSE_LEAVE_BIT_LENGTH)
-#define IS_LMOUSE_DOWN_TB_BIT_LENGTH 	1
 
 CaptionButton get_caption_button(HWND hwnd) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -96,18 +94,6 @@ bool get_is_mouse_leave(HWND hwnd) {
 void set_is_mouse_leave(HWND hwnd, bool flag) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	set_nbits_from_ith(&data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, flag);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
-}
-
-bool get_is_lmouse_down_tb(HWND hwnd) {
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	bool is_mouse_leave = (bool) get_nbits_from_ith(data, IS_LMOUSE_DOWN_TB_BIT, IS_LMOUSE_DOWN_TB_BIT_LENGTH);
-	return is_mouse_leave;
-}
-
-void set_is_lmouse_down_tb(HWND hwnd, bool flag) {
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	set_nbits_from_ith(&data, IS_LMOUSE_DOWN_TB_BIT, IS_LMOUSE_DOWN_TB_BIT_LENGTH, flag);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
@@ -401,9 +387,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT minimize_button_border_check = minimize_button_paint_rect;
 	minimize_button_border_check.top += border_check_sensitivity;
 
-	static POINT start_drag_point;
-	static int click_count = 0;
-	static DWORD last_time_click = 0;
 	switch(msg) {
 		case WM_CREATE: {
 			// HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
@@ -445,7 +428,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW);
 			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
 			set_is_mouse_leave(hwnd, true);
-			set_is_lmouse_down_tb(hwnd, false);
 	        break;
 		}
 		case WM_DESTROY: {
@@ -473,6 +455,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// 	return true;
 		// }
 		case WM_PAINT: {
+			// printf("PAINT\n");
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint(hwnd, &ps);
 
@@ -544,9 +527,10 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				else if (PtInRect(&minimize_button_border_check, mouse)) {
 					return HTMINBUTTON;
 				}
-				return HTCLIENT /*HTCAPTION*/;								// when not focus and hold titlebar
-																			//						(no move)
-																			// there will be a delay
+				if (!!GetFocus()) {
+					return HTCAPTION;							// when not focus and hold titlebar (no move)
+                }        										// there will be a delay in repaint titlebar
+                return HTCLIENT;								// so we must return HTCLIENT
 			}
 			else if (PtInRect(&client_rect, mouse)) {
 				return HTCLIENT;
@@ -615,30 +599,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return true;
 		}
 		case WM_MOUSEMOVE: {
-			if (get_is_lmouse_down_tb(hwnd)) {
-				POINT cur_pos = { GET_X_LPARAM(lparam) + rect.left,
-								  GET_Y_LPARAM(lparam) + rect.top };		// relative to screen
-				int delta_x = cur_pos.x - start_drag_point.x;
-				int delta_y = cur_pos.y - start_drag_point.y;
-				int new_x = rect.left + delta_x;
-				int new_y = rect.top + delta_y;
-
-				if (is_maximized && (delta_x != 0 || delta_y != 0)) {
-					WINDOWPLACEMENT placement;
-					placement.length = sizeof(WINDOWPLACEMENT);
-					GetWindowPlacement(hwnd, &placement);
-					placement.showCmd = SW_RESTORE;
-					SetWindowPlacement(hwnd, &placement);
-					SIZE new_window_size = (SIZE) {
-							placement.rcNormalPosition.right - placement.rcNormalPosition.left,
-		 					placement.rcNormalPosition.bottom - placement.rcNormalPosition.top };
-					new_x += new_window_size.cx * (cur_pos.x - rect.left)/window_size.cx;
-					new_y += new_window_size.cy * (cur_pos.y - rect.top)/window_size.cy;
-					click_count = 0;
-				}
-
-				SetWindowPos(hwnd, NULL, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
-				start_drag_point = cur_pos;
+			if (GetCapture()) {
+				PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam);
+				ReleaseCapture();
 			}
 			if (cur_hovered_button != CaptionButton_None) {
 				InvalidateRect(hwnd, &title_bar_rect, false);
@@ -727,8 +690,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			break;
 		}
-		case WM_RBUTTONDOWN: {
-			// if (wparam == HTCAPTION) {
+		case WM_NCRBUTTONUP: {
+			if (wparam == HTCAPTION) {
 				// HMENU hmenu = CreatePopupMenu();
 				// if (hmenu != NULL) {
 				// 	POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
@@ -738,11 +701,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				// 	DestroyMenu(hmenu);
 				// }
 
-			int pos_y = GET_Y_LPARAM(lparam);
-			if (pos_y <= TITLEBAR_HEIGHT) {
 				HMENU hmenu = GetSystemMenu(hwnd, false);
 				if (hmenu != NULL) {
-					POINT menu_pos = { GET_X_LPARAM(lparam) + rect.left, pos_y + rect.top };
+					POINT menu_pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
 					int cmd = TrackPopupMenuEx(hmenu,
 							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
 							menu_pos.x, menu_pos.y, hwnd, NULL);
@@ -755,30 +716,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_LBUTTONDOWN: {
 			if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
-				set_is_lmouse_down_tb(hwnd, true);
-
-				// https://devblogs.microsoft.com/oldnewthing/20041018-00/?p=37543
-				POINT pt;
-				GetCursorPos(&pt);
-				DWORD time_click = GetMessageTime();
-				RECT clicked_rect = { start_drag_point.x, start_drag_point.y, start_drag_point.x, start_drag_point.y };
-				InflateRect(&clicked_rect, GetSystemMetrics(SM_CXDOUBLECLK) / 2, GetSystemMetrics(SM_CYDOUBLECLK) / 2);
-				if (!PtInRect(&clicked_rect, pt) || time_click - last_time_click > GetDoubleClickTime() || click_count >= 2) {
-					click_count = 0;
-				}
-				last_time_click = time_click;
-				click_count++;
-				if (click_count == 2) {
-					WINDOWPLACEMENT placement;
-					placement.length = sizeof(WINDOWPLACEMENT);
-					GetWindowPlacement(hwnd, &placement);
-					placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
-					SetWindowPlacement(hwnd, &placement);
-				}
-
-				start_drag_point = (POINT) { pt.x, pt.y };
 				SetCapture(hwnd);
-				// SetCursor(LoadCursor(NULL, IDC_SIZEALL));
 			}
 			break;
 		}
@@ -786,20 +724,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			ReleaseCapture();
 			break;
 		}
-		case WM_CAPTURECHANGED: {
-			set_is_lmouse_down_tb(hwnd, (HWND)lparam == hwnd);
-			break;
-		}
-		// case WM_LBUTTONDBLCLK: {
-		// 	if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
-		// 		WINDOWPLACEMENT placement;
-		// 		placement.length = sizeof(WINDOWPLACEMENT);
-		// 		GetWindowPlacement(hwnd, &placement);
-		// 		placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
-		// 		SetWindowPlacement(hwnd, &placement);
-		// 	}
-		// 	break;
-		// }
 		case WM_INITMENUPOPUP: {
 			bool is_system_menu = HIWORD(lparam);
 			HMENU hmenu = (HMENU) wparam;

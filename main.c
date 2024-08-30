@@ -65,6 +65,8 @@ typedef enum CaptionButton {
 
 #define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
 #define IS_MOUSE_LEAVE_BIT_LENGTH 		1
+#define START_SNAP_BIT 				(IS_MOUSE_LEAVE_BIT + IS_MOUSE_LEAVE_BIT_LENGTH)
+#define START_SNAP_BIT_LENGTH 		1
 
 LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char start, unsigned char count) {
 	assert(start + count <= 8*sizeof(LONG_PTR));
@@ -295,7 +297,7 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		const int length = GetWindowTextLength(hwnd);
 		char text[MAX_PATH];
 		GetWindowText(hwnd, text, length + 1);
-		left_padding += dr_caption(hdc, text, length, (RECT){ left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
+		left_padding += dr_caption(hdc, text, length, (RECT) { left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
 	}
 
 	const SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
@@ -371,6 +373,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	};
 	sysmenu_paint_rect.right = sysmenu_paint_rect.left + sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2;
 	sysmenu_paint_rect.bottom = sysmenu_paint_rect.top + sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2;
+	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
 	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
 	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
 											window_size.cx - border_width, TITLEBAR_HEIGHT };
@@ -480,9 +483,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return 0;
 		}
 		case WM_NCHITTEST: {
-			const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
 			const int border_check_sensitivity = is_maximized ? 0 : 4;
-			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
+			POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+			MapWindowPoints(NULL, hwnd, &mouse, 1 /*number of points*/);
 			const int border_width_check = border_width + border_check_sensitivity;
 
 			if (!is_maximized) {
@@ -550,26 +553,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				if (!is_maximized || is_taskbar_hidden(hwnd)) {
 					params->rgrc[0].bottom += border_width;
 				}
-				params->rgrc[1] = params->rgrc[2];
 				return WVR_VALIDRECTS;			// make the resize smoothly
 			}
 			return 0;							// disable default behaviour
 												// when right click menu shown,
 												// an old style caption button appear
-		}
-		// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
-		case WM_SIZE: {
-			if (wparam == SIZE_MAXIMIZED) {
-				set_maximize_window(hwnd);
-			}
-			else if (wparam == SIZE_RESTORED) {
-				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-							SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOCOPYBITS);
-			}
-			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
-			// InvalidateRect(hwnd, NULL, false);
-			break;
 		}
 		case WM_GETMINMAXINFO: {
 			MINMAXINFO *mmi = (MINMAXINFO*) lparam;
@@ -755,12 +743,112 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
-		// case WM_WINDOWPOSCHANGING:
+		case WM_WINDOWPOSCHANGING: {
+			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
+			if (wpos->flags == 0x308020) {
+				set_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH, true);
+				printf("no maximized ");
+			}
+			if (wpos->flags == 0x300204) {
+				if (get_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH)) {
+					int system_border_width = GetSystemMetrics(SM_CYFRAME);
+					if (system_border_width != 8) {
+						printf("%d\n", system_border_width);
+					}
+					set_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH, false);
+					wpos->cy *= 2;
+					wpos->cy += 2*system_border_width;
+					wpos->y = -system_border_width;
+				}
+				printf("change position ");
+			}
+			// if (wpos->flags == 0x108120) {
+			// 	printf("no minimized ");
+			// }
+			break;
+		}
+		// https://github.com/atauzki/notepad2/blob/5984878391ebbd649eaf566a0982a1a26be5deea/src/Notepad2.c#L1117
+		// https://github.com/eval1749/evita/blob/4e9dd86009af091e213a208270ef9bd429fbb698/evita/ui/widget.cc#L807
 		case WM_WINDOWPOSCHANGED:
 		{
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
+			// if (wpos->flags & 0x300000) {
+			// if (wpos->flags >= 0xffff) {
+			// 	if (wpos->flags == 0x10001847 || wpos->flags == 0x10001843) {
+			// 		printf("Create ");
+			// 	}
+			// 	if (wpos->flags == 0x20001897) {
+			// 		printf("Destroy ");
+			// 	}
+			// 	if (wpos->flags == 0x00008130) {
+			// 		printf("Minimize ");
+			// 	}
+			// 	if (wpos->flags == 0x00008124) {
+			// 		printf("Restore ");
+			// 	}
+			// 	if (wpos->flags == 0x00000A15) {
+			// 		printf("Move ");
+			// 	}
+			// 	if (wpos->flags == 0x300204) {
+			// 		printf("half <-> 1/4 bottom ");	// normal -> half
+			// 	}
+			// 	if (wpos->flags == 0x301206) {
+			// 		if (hack_snap) {
+			// 			hack_snap = false;
+			// 			SetWindowPos(hwnd, NULL, 0, 0, wpos->cx, wpos->cy*2,
+			// 				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+			// 		}
+			// 		printf("half <-> 1/4 top ");
+			// 	}
+			// 	if (wpos->flags == 0x300a05) {
+			// 		printf("1/4 left top/bottom <-> 1/4 right top/bottom "); // 1/2 left <-> 1/2 right
+			// 	}
+			// 	if (wpos->flags == 0x308024) {
+			// 		// hack_snap = true;
+			// 		// wpos->cy *= 2;
+			// 		// wpos->flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+			// 		printf("maximized -> (Windows + Right) ");
+			// 	}
+			// 	if (wpos->flags == 0x309026) {
+			// 		// hack_snap = true;
+			// 		// SetWindowPos(hwnd, NULL, 0, 0, wpos->cx, wpos->cy*2,
+			// 		// 	SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+			// 		printf("maximized -> (Windows + Left) ");
+			// 	}
+			// 	if (wpos->flags == 0x108120) {
+			// 		printf("minimized -> (Windows + Up) ");
+			// 	}
+			// 	if (wpos->flags == 0x100a15) {
+			// 		printf("being snapped by mouse ");
+			// 	}
+			// 	if (wpos->flags == 0x100204) {
+			// 		printf("start snapping by mouse ");
+			// 	}
+			// 	if (wpos->flags == 0x100214) {
+			// 		printf("horizontal resize while snapped ");
+			// 	}
+			// 	if (wpos->flags == 0x101216) {
+			// 		printf("vertical resize while snapped ");
+			// 	}
+			// 	{
+			// 		printf("0x%0x\n", wpos->flags);
+			// 	}
+			// }
+			// printf("0x%04x\n", wpos->flags);
+			// wpos->flags |= SWP_NOCOPYBITS;					// cause unnecessary redraw when moving
 			if (!(wpos->flags & SWP_NOSIZE)) {
+				// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
+				WINDOWPLACEMENT wp = { .length = sizeof(WINDOWPLACEMENT) };
+				GetWindowPlacement(hwnd, &wp);
+				if (wp.showCmd == SW_MAXIMIZE) {
+					set_maximize_window(hwnd);
+				}
+				else if (wp.showCmd == SW_RESTORE) {
+					wpos->flags |= SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+								SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+				}
 				InvalidateRect(hwnd, NULL, true);
+				return 0;
 			}
 			if ((wpos->flags & SWP_NOSIZE) && !(wpos->flags & SWP_NOMOVE) && (wpos->flags & SWP_NOZORDER)) {
 				SetCursor(LoadCursor(NULL, IDC_SIZEALL));

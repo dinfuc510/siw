@@ -1,5 +1,5 @@
 #ifndef _WIN32_WINNT
-	#define _WIN32_WINNT 	0x0500	// _WIN32_WINNT_WIN2K (Windows 2000)
+	#define _WIN32_WINNT 	0x0500	/* _WIN32_WINNT_WIN2K (Windows 2000) */
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -65,8 +65,10 @@ typedef enum CaptionButton {
 
 #define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
 #define IS_MOUSE_LEAVE_BIT_LENGTH 		1
-#define START_SNAP_BIT 				(IS_MOUSE_LEAVE_BIT + IS_MOUSE_LEAVE_BIT_LENGTH)
-#define START_SNAP_BIT_LENGTH 		1
+#define MAXIMIZE_SNAPPING_BIT 			(IS_MOUSE_LEAVE_BIT + IS_MOUSE_LEAVE_BIT_LENGTH)
+#define MAXIMIZE_SNAPPING_BIT_LENGTH 	1
+#define IS_TASKBAR_HIDDEN_BIT 			(MAXIMIZE_SNAPPING_BIT + MAXIMIZE_SNAPPING_BIT_LENGTH)
+#define IS_TASKBAR_HIDDEN_BIT_LENGTH 	1
 
 LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char start, unsigned char count) {
 	assert(start + count <= 8*sizeof(LONG_PTR));
@@ -92,14 +94,14 @@ void set_prop(HWND hwnd, unsigned char start, unsigned char count, LONG_PTR valu
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
-// NOTE: Both bg and fg are in rgb
+/* NOTE: Both bg and fg are in rgb */
 unsigned long blend_color(unsigned long bg, unsigned long fg, unsigned char alpha) {
 	int blue = ((bg & 0xff) * (255 - alpha) + (fg & 0xff) * alpha) / 255;
 	bg >>= 8; fg >>= 8;
 	int green = ((bg & 0xff) * (255 - alpha) + (fg & 0xff) * alpha) / 255;
 	bg >>= 8; fg >>= 8;
 	int red = ((bg & 0xff) * (255 - alpha) + (fg & 0xff) * alpha) / 255;
-	return (blue << 16) | (green << 8) | red;						// the winapi use bgr
+	return (blue << 16) | (green << 8) | red;						/* the winapi use bgr */
 }
 
 
@@ -140,9 +142,9 @@ void dr_rect_line(HDC hdc, int x, int y, int w, int h, int border_width, unsigne
 	DeleteObject(pen);
 }
 
-// https://learn.microsoft.com/en-us/windows/apps/design/style/xaml-theme-resources#the-xaml-type-ramp
-// font style: (12px, normal)
-// align: left(x), center(y)
+/* https://learn.microsoft.com/en-us/windows/apps/design/style/xaml-theme-resources#the-xaml-type-ramp
+   font style: (12px, normal)
+   align: left(x), center(y) */
 int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long color) {
 	static int font_size = 12;
 	const char *font_family = "Segoe UI";
@@ -166,7 +168,7 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 		SIZE ellipsis_size_px;
 		GetTextExtentPoint32(hdc, "...", 3, &ellipsis_size_px);
 		ellipsis_width_px = ellipsis_size_px.cx;
-		// TODO: use binary search concept to find the length faster
+		/* TODO: use binary search concept to find the length faster */
 		while (text_size_px.cx + ellipsis_width_px > bounds.right - bounds.left && length > 1) {
 			length--;
 			GetTextExtentPoint32(hdc, text, length, &text_size_px);
@@ -195,8 +197,8 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 bool is_taskbar_hidden(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
-    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
-    	return EqualRect(&mi.rcWork, &mi.rcMonitor);
+	if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+		return EqualRect(&mi.rcWork, &mi.rcMonitor);
 	}
 	return false;
 }
@@ -204,25 +206,29 @@ bool is_taskbar_hidden(HWND hwnd) {
 bool set_maximize_window(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
-    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
-		// to not overlap the autohide taskbar (fullscreen)
-    	APPBARDATA abd;
-		abd.cbSize = sizeof(APPBARDATA);
-		abd.uEdge = ABE_BOTTOM;
-		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-			mi.rcWork.bottom -= 1;
-		}
-		abd.uEdge = ABE_RIGHT;
-		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-			mi.rcWork.right -= 1;
-		}
-		abd.uEdge = ABE_TOP;
-		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-			mi.rcWork.top += 1;
-		}
-		abd.uEdge = ABE_LEFT;
-		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-			mi.rcWork.left += 1;
+	if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+		/* to not overlap the autohide taskbar (fullscreen)
+		   this will affect to the snapping behaviour on Windows 10
+		   The solution is handle WM_WINDOWPOSCHANGING (see below) */
+		if (get_prop(hwnd, IS_TASKBAR_HIDDEN_BIT, IS_TASKBAR_HIDDEN_BIT_LENGTH)) {
+			APPBARDATA abd;
+			abd.cbSize = sizeof(APPBARDATA);
+			abd.uEdge = ABE_BOTTOM;
+			if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+				mi.rcWork.bottom -= 1;
+			}
+			abd.uEdge = ABE_RIGHT;
+			if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+				mi.rcWork.right -= 1;
+			}
+			abd.uEdge = ABE_TOP;
+			if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+				mi.rcWork.top += 1;
+			}
+			abd.uEdge = ABE_LEFT;
+			if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+				mi.rcWork.left += 1;
+			}
 		}
 		return SetWindowPos(hwnd, NULL,
 						mi.rcWork.left, mi.rcWork.top,
@@ -234,7 +240,7 @@ bool set_maximize_window(HWND hwnd) {
 	return false;
 }
 
-// https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613
+/* https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613 */
 static void on_draw(HWND hwnd, HDC hdc) {
 	const bool has_focus = !!GetFocus();
 	const CaptionButton cur_hovered_button = (CaptionButton) get_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
@@ -245,9 +251,9 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
 	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
-	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; //bgr 0x4f4f4f 0x2f2f2f 0xb16300
+	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; /* bgr 0x4f4f4f 0x2f2f2f 0xb16300 */
 	static unsigned long border_color = 0x4f4f4f;
-	static unsigned long background_color = 0x1e1e1e;				//0x0c0c0c
+	static unsigned long background_color = 0x1e1e1e;				/* 0x0c0c0c */
 	const unsigned long foreground_color = has_focus ? 0xffffff : 0x7f7f7f;
 
 	{
@@ -278,12 +284,10 @@ static void on_draw(HWND hwnd, HDC hdc) {
 			sysmenu_icon = LoadIcon(NULL, IDI_APPLICATION);
 		}
 		assert(sysmenu_icon != NULL && "ERROR: could not load sysmenu icon");
-		// https://devblogs.microsoft.com/oldnewthing/20101020-00/?p=12493
-		// SIZE icon_size;
-		// GetIconDimensions(sysmenu_icon, &icon_size);
+		/* https://devblogs.microsoft.com/oldnewthing/20101020-00/?p=12493 */
 		dr_rect(hdc, left_padding-SYSMENU_HIGHLIGHT_SIZE, border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2,
 				sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2, sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2, sysmenu_color);
-		HBRUSH hbr = CreateSolidBrush(sysmenu_color); 	// GetSysColorBrush(COLOR_MENU)
+		HBRUSH hbr = CreateSolidBrush(sysmenu_color); 	/* GetSysColorBrush(COLOR_MENU) */
 		DrawIconEx(hdc, left_padding, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size.cy/2, sysmenu_icon,
 				sysmenu_size.cx, sysmenu_size.cy, 0, hbr, DI_NORMAL | DI_COMPAT);
 		DeleteObject(hbr);
@@ -343,12 +347,12 @@ static bool register_window_class(const char *class, WNDPROC proc) {
 		.lpszClassName = class,
 		.lpfnWndProc = proc,
 		.hIcon = LoadIcon(NULL, IDI_APPLICATION),
-		.hIconSm = LoadImage(GetModuleHandle(NULL), MAKEINTRESOURCE(5), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR),
+		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
 		.style = CS_OWNDC
 	});
 }
 
-// https://github.com/cwabbott0/wine-hangover/blob/1736d902f713e30e3d46552ca7c790c0836c44d9/dlls/comctl32/button.c#L674
+/* https://github.com/cwabbott0/wine-hangover/blob/1736d902f713e30e3d46552ca7c790c0836c44d9/dlls/comctl32/button.c#L674 */
 bool track_mouse_leave(HWND hwnd) {
 	return TrackMouseEvent(&(TRACKMOUSEEVENT) {
 		.cbSize = sizeof(TRACKMOUSEEVENT),
@@ -382,6 +386,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT minimize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&minimize_button_paint_rect, -CAPTION_MENU_WIDTH*2, 0);
 
+	static RECT normal_pos;
 #ifdef DEBUG
 	if (print_message) {
 		if (msg < messages_len && messages[msg] != NULL) {
@@ -407,14 +412,14 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					GetWindowRect(dummy, &dummy_rect);
 					DestroyWindow(dummy);
 				}
-				// UnregisterClass("DWindow", g_hmodule);
+				/* UnregisterClass("DWindow", g_hmodule); */
 			}
 
 			if (rect.left <= 0) {
 				rect.left = dummy_rect.left;
 			}
-			// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowa
-			// rect.top might be ignore
+			/* https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowa
+			   rect.top might be ignore */
 			if (rect.top <= 0) {
 				rect.top = dummy_rect.top;
 			}
@@ -427,16 +432,18 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
 						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW | SWP_NOCOPYBITS);
-			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
+			/* trigger the program create system menu */
+			(void) GetSystemMenu(hwnd, false);
 			set_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, true);
-	        break;
+			set_prop(hwnd, IS_TASKBAR_HIDDEN_BIT, IS_TASKBAR_HIDDEN_BIT_LENGTH, is_taskbar_hidden(hwnd));
+			break;
 		}
 		case WM_DESTROY: {
-			// TODO: save window's position and size when close by hold ctrl then click X button
+			/* TODO: save window's position and size when close by hold ctrl then click X button */
 			PostQuitMessage(0);
 			break;
 		}
-		// https://github.com/grassator/win32-window-custom-titlebar/blob/main/main.c
+		/* https://github.com/grassator/win32-window-custom-titlebar/blob/main/main.c */
 		case WM_ACTIVATE: {
 			if (LOWORD(wparam) == WA_INACTIVE) {
 				if (cur_hovered_button != CaptionButton_None) {
@@ -445,9 +452,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			InvalidateRect(hwnd, &title_bar_rect, false);
 			return 0;
-	    }
+		}
 		case WM_NCACTIVATE: {
-			// redraw take too long when hold inactive titlebar
+			/* redraw take too long when hold inactive titlebar */
 			lparam = -1;
 			return true;
 		}
@@ -535,9 +542,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					return HTMINBUTTON;
 				}
 				if (!!GetFocus()) {
-					return HTCAPTION;							// when not focus and hold titlebar (no move)
-                }        										// there will be a delay in repaint titlebar
-                return HTCLIENT;								// so we must return HTCLIENT
+					return HTCAPTION;							/* when not focus and hold titlebar (no move) */
+				}												/* there will be a delay in repaint titlebar */
+				return HTCLIENT;								/* so we must return HTCLIENT */
 			}
 			else if (PtInRect(&client_rect, mouse)) {
 				return HTCLIENT;
@@ -545,19 +552,19 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 			return HTNOWHERE;
 		}
-		// https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag
-		// https://github.com/Thomas-Mielke-Software/ECTImport/blob/ff4ba7b31a4a220c801029a10bc5305a7c9fca71/ResizableLayout.cpp#L858
+		/* https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag */
+		/* https://github.com/Thomas-Mielke-Software/ECTImport/blob/ff4ba7b31a4a220c801029a10bc5305a7c9fca71/ResizableLayout.cpp#L858 */
 		case WM_NCCALCSIZE: {
 			if (wparam == true) {
 				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
-				if (!is_maximized || is_taskbar_hidden(hwnd)) {
+				if (!is_maximized || get_prop(hwnd, IS_TASKBAR_HIDDEN_BIT, IS_TASKBAR_HIDDEN_BIT_LENGTH)) {
 					params->rgrc[0].bottom += border_width;
 				}
-				return WVR_VALIDRECTS;			// make the resize smoothly
+				return WVR_VALIDRECTS;			/* make the resize smoothly */
 			}
-			return 0;							// disable default behaviour
-												// when right click menu shown,
-												// an old style caption button appear
+			return 0;							/* disable default behaviour
+												   when right click menu shown,
+												   an old style caption button appear */
 		}
 		case WM_GETMINMAXINFO: {
 			MINMAXINFO *mmi = (MINMAXINFO*) lparam;
@@ -568,6 +575,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_MOUSEMOVE: {
 			if (GetCapture()) {
 				PostMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam);
+				/* force redraw */
+				RedrawWindow(hwnd, &title_bar_rect, NULL, RDW_INVALIDATE | RDW_NOERASE | RDW_NOFRAME | RDW_UPDATENOW);
 				ReleaseCapture();
 			}
 			if (cur_hovered_button != CaptionButton_None) {
@@ -581,10 +590,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				set_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, true);
 				if (cur_hovered_button != CaptionButton_None) {
 					InvalidateRect(hwnd, &close_button_paint_rect, false);
-			        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
-			        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
-			        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
-			        // InvalidateRect(hwnd, &title_bar_rect, false);
+					InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+					InvalidateRect(hwnd, &maximize_button_paint_rect, false);
+					InvalidateRect(hwnd, &sysmenu_paint_rect, false);
 					set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, CaptionButton_None);
 				}
 			}
@@ -612,11 +620,10 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 			if (new_hovered_button != cur_hovered_button) {
 				InvalidateRect(hwnd, &close_button_paint_rect, false);
-		        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
-		        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
-		        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
-		        // InvalidateRect(hwnd, &title_bar_rect, false);
-		        set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, new_hovered_button);
+				InvalidateRect(hwnd, &minimize_button_paint_rect, false);
+				InvalidateRect(hwnd, &maximize_button_paint_rect, false);
+				InvalidateRect(hwnd, &sysmenu_paint_rect, false);
+				set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, new_hovered_button);
 			}
 			break;
 		}
@@ -636,14 +643,14 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				clicked_button = CaptionButton_Sysmenu;
 			}
 			if (clicked_button != CaptionButton_None) {
-		        set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, clicked_button);
-		        if (clicked_button != CaptionButton_Sysmenu) {
-					return 0;		// skip default behaviour of caption buttons except sysmenu
+				set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, clicked_button);
+				if (clicked_button != CaptionButton_Sysmenu) {
+					return 0;		/* skip default behaviour of caption buttons except sysmenu */
 				}
 			}
 			break;
 		}
-		// https://github.com/microsoft/terminal/blob/3486111722296f287158e0340789c607642c1067/src/cascadia/TerminalApp/TitlebarControl.cpp#L97
+		/* https://github.com/microsoft/terminal/blob/3486111722296f287158e0340789c607642c1067/src/cascadia/TerminalApp/TitlebarControl.cpp#L97 */
 		case WM_NCLBUTTONUP: {
 			int hit_test = wparam;
 			if (hit_test == HTCLOSE) {
@@ -662,15 +669,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_NCRBUTTONUP: {
 			if (wparam == HTCAPTION) {
-				// HMENU hmenu = CreatePopupMenu();
-				// if (hmenu != NULL) {
-				// 	POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-
-				// 	AppendMenu(hmenu, MF_STRING, 1, "Item 1");
-				// 	TrackPopupMenuEx(hmenu, TPM_LEFTALIGN, mouse.x, mouse.y, hwnd, NULL);
-				// 	DestroyMenu(hmenu);
-				// }
-
 				HMENU hmenu = GetSystemMenu(hwnd, false);
 				if (hmenu != NULL) {
 					POINT menu_pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
@@ -698,18 +696,17 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			int request = (wparam & 0xFFF0);
 			bool display_menu = false;
 			if (request == SC_KEYMENU) {
-	        	char key_stroke = (char) lparam;
-            	// printf("%c\n", key_stroke);
-	        	if (key_stroke == ' ') {
-	        		display_menu = true;
-	        	}
-	        }
-	        else if (request == SC_MOUSEMENU) {
-	        	display_menu = true;
-	        }
+				char key_stroke = (char) lparam;
+				if (key_stroke == ' ') {
+					display_menu = true;
+				}
+			}
+			else if (request == SC_MOUSEMENU) {
+				display_menu = true;
+			}
 
-            if (display_menu) {
-	            HMENU hmenu = GetSystemMenu(hwnd, false);
+			if (display_menu) {
+				HMENU hmenu = GetSystemMenu(hwnd, false);
 				if (hmenu != NULL) {
 					int cmd = TrackPopupMenuEx(hmenu,
 							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
@@ -718,8 +715,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 						PostMessage(hwnd, WM_SYSCOMMAND, cmd, 0);
 					}
 				}
-	            return 0;
-	        }
+				return 0;
+			}
 			break;
 		}
 		case WM_INITMENUPOPUP: {
@@ -746,98 +743,28 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_WINDOWPOSCHANGING: {
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
 			if (wpos->flags == 0x308020) {
-				set_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH, true);
-				printf("no maximized ");
+				set_prop(hwnd, MAXIMIZE_SNAPPING_BIT, MAXIMIZE_SNAPPING_BIT_LENGTH, true);
 			}
-			if (wpos->flags == 0x300204) {
-				if (get_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH)) {
-					int system_border_width = GetSystemMetrics(SM_CYFRAME);
-					if (system_border_width != 8) {
-						printf("%d\n", system_border_width);
+			else if (wpos->flags == 0x300204) {
+				if (get_prop(hwnd, MAXIMIZE_SNAPPING_BIT, MAXIMIZE_SNAPPING_BIT_LENGTH)) {
+					if (get_prop(hwnd, IS_TASKBAR_HIDDEN_BIT, IS_TASKBAR_HIDDEN_BIT_LENGTH)) {
+						wpos->cy *= 2;
 					}
-					set_prop(hwnd, START_SNAP_BIT, START_SNAP_BIT_LENGTH, false);
-					wpos->cy *= 2;
+					int system_border_width = GetSystemMetrics(SM_CYFRAME);
 					wpos->cy += 2*system_border_width;
-					wpos->y = -system_border_width;
+					wpos->y -= system_border_width;
+					set_prop(hwnd, MAXIMIZE_SNAPPING_BIT, MAXIMIZE_SNAPPING_BIT_LENGTH, false);
 				}
-				printf("change position ");
 			}
-			// if (wpos->flags == 0x108120) {
-			// 	printf("no minimized ");
-			// }
 			break;
 		}
-		// https://github.com/atauzki/notepad2/blob/5984878391ebbd649eaf566a0982a1a26be5deea/src/Notepad2.c#L1117
-		// https://github.com/eval1749/evita/blob/4e9dd86009af091e213a208270ef9bd429fbb698/evita/ui/widget.cc#L807
-		case WM_WINDOWPOSCHANGED:
-		{
+		/* https://github.com/atauzki/notepad2/blob/5984878391ebbd649eaf566a0982a1a26be5deea/src/Notepad2.c#L1117 */
+		/* https://github.com/eval1749/evita/blob/4e9dd86009af091e213a208270ef9bd429fbb698/evita/ui/widget.cc#L807 */
+		case WM_WINDOWPOSCHANGED: {
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-			// if (wpos->flags & 0x300000) {
-			// if (wpos->flags >= 0xffff) {
-			// 	if (wpos->flags == 0x10001847 || wpos->flags == 0x10001843) {
-			// 		printf("Create ");
-			// 	}
-			// 	if (wpos->flags == 0x20001897) {
-			// 		printf("Destroy ");
-			// 	}
-			// 	if (wpos->flags == 0x00008130) {
-			// 		printf("Minimize ");
-			// 	}
-			// 	if (wpos->flags == 0x00008124) {
-			// 		printf("Restore ");
-			// 	}
-			// 	if (wpos->flags == 0x00000A15) {
-			// 		printf("Move ");
-			// 	}
-			// 	if (wpos->flags == 0x300204) {
-			// 		printf("half <-> 1/4 bottom ");	// normal -> half
-			// 	}
-			// 	if (wpos->flags == 0x301206) {
-			// 		if (hack_snap) {
-			// 			hack_snap = false;
-			// 			SetWindowPos(hwnd, NULL, 0, 0, wpos->cx, wpos->cy*2,
-			// 				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
-			// 		}
-			// 		printf("half <-> 1/4 top ");
-			// 	}
-			// 	if (wpos->flags == 0x300a05) {
-			// 		printf("1/4 left top/bottom <-> 1/4 right top/bottom "); // 1/2 left <-> 1/2 right
-			// 	}
-			// 	if (wpos->flags == 0x308024) {
-			// 		// hack_snap = true;
-			// 		// wpos->cy *= 2;
-			// 		// wpos->flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
-			// 		printf("maximized -> (Windows + Right) ");
-			// 	}
-			// 	if (wpos->flags == 0x309026) {
-			// 		// hack_snap = true;
-			// 		// SetWindowPos(hwnd, NULL, 0, 0, wpos->cx, wpos->cy*2,
-			// 		// 	SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
-			// 		printf("maximized -> (Windows + Left) ");
-			// 	}
-			// 	if (wpos->flags == 0x108120) {
-			// 		printf("minimized -> (Windows + Up) ");
-			// 	}
-			// 	if (wpos->flags == 0x100a15) {
-			// 		printf("being snapped by mouse ");
-			// 	}
-			// 	if (wpos->flags == 0x100204) {
-			// 		printf("start snapping by mouse ");
-			// 	}
-			// 	if (wpos->flags == 0x100214) {
-			// 		printf("horizontal resize while snapped ");
-			// 	}
-			// 	if (wpos->flags == 0x101216) {
-			// 		printf("vertical resize while snapped ");
-			// 	}
-			// 	{
-			// 		printf("0x%0x\n", wpos->flags);
-			// 	}
-			// }
-			// printf("0x%04x\n", wpos->flags);
-			// wpos->flags |= SWP_NOCOPYBITS;					// cause unnecessary redraw when moving
+			/* wpos->flags |= SWP_NOCOPYBITS;					cause unnecessary redraw when moving */
 			if (!(wpos->flags & SWP_NOSIZE)) {
-				// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
+				/* https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353 */
 				WINDOWPLACEMENT wp = { .length = sizeof(WINDOWPLACEMENT) };
 				GetWindowPlacement(hwnd, &wp);
 				if (wp.showCmd == SW_MAXIMIZE) {
@@ -855,9 +782,22 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			break;
 		}
+		case WM_EXITSIZEMOVE: {
+			WINDOWPLACEMENT wp;
+			GetWindowPlacement(hwnd, &wp);
+			normal_pos = wp.rcNormalPosition;
+			break;
+		}
 		case WM_SETTINGCHANGE: {
-			if (wparam == SPI_SETWORKAREA && is_maximized) {
-				set_maximize_window(hwnd);
+			if (wparam == SPI_SETWORKAREA) {
+				WINDOWPLACEMENT wp = { .length = sizeof(WINDOWPLACEMENT) };
+				GetWindowPlacement(hwnd, &wp);
+				wp.rcNormalPosition = normal_pos;
+				SetWindowPlacement(hwnd, &wp);
+				set_prop(hwnd, IS_TASKBAR_HIDDEN_BIT, IS_TASKBAR_HIDDEN_BIT_LENGTH, is_taskbar_hidden(hwnd));
+				if (is_maximized) {
+					set_maximize_window(hwnd);
+				}
 			}
 			break;
 		}
@@ -888,13 +828,13 @@ int main(void)
 		return 1;
 	}
 
-	// https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513
+	/* https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513 */
 	MSG msg;
 	while(GetMessage(&msg, NULL, 0, 0)) {
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
 
-	// UnregisterClass("SWindow", g_hmodule);
+	/* UnregisterClass("SWindow", g_hmodule); */
 	return 0;
 }

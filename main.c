@@ -1,4 +1,4 @@
-// #define _WIN32_WINNT 	0x500
+#define _WIN32_WINNT 	0x500
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <assert.h>
@@ -179,26 +179,26 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 	return text_size_px.cx + ellipsis_width_px;
 }
 
-void offset_maximize_rect(RECT *rect) {
-	int frame_x = GetSystemMetrics(SM_CXFRAME);
-	int frame_y = GetSystemMetrics(SM_CYFRAME);
-#ifdef SM_CXPADDEDBORDER
-	int pad = GetSystemMetrics(SM_CXPADDEDBORDER);
-	frame_x += pad;
-	frame_y += pad;
-#endif
-	rect->left += frame_x;
-	rect->top += frame_y;
-	rect->right -= frame_x;
-	rect->bottom -= frame_y;
-}
-
 bool is_taskbar_hidden(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
     if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
     	return EqualRect(&mi.rcWork, &mi.rcMonitor);
 	}
+	return false;
+}
+
+bool set_maximize_window(HWND hwnd) {
+	MONITORINFO mi;
+	mi.cbSize = sizeof(MONITORINFO);
+    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+		return SetWindowPos(hwnd, NULL,
+						mi.rcWork.left, mi.rcWork.top,
+						mi.rcWork.right - mi.rcWork.left,
+						mi.rcWork.bottom - mi.rcWork.top - is_taskbar_hidden(hwnd),	// for not overlap the non-autohide-bottom taskbar (fullscreen)
+						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+	}
+
 	return false;
 }
 
@@ -209,9 +209,6 @@ static void on_draw(HWND hwnd, HDC hdc) {
 
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	if (is_maximized && !is_taskbar_hidden(hwnd)) {
-		offset_maximize_rect(&rect);
-	}
 	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
 	const int border_width = is_maximized ? 0 : 1;
@@ -305,6 +302,19 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	}
 }
 
+bool register_window_class(const char *lpszClassName, WNDPROC lpfnWndProc) {
+	return RegisterClassEx(&(WNDCLASSEX) {
+		.cbSize = sizeof(WNDCLASSEX),
+		.lpszClassName = lpszClassName,
+		.lpfnWndProc = lpfnWndProc,
+		.hIcon = LoadIcon(NULL, IDI_APPLICATION),
+		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
+		// .hInstance = GetModuleHandle(NULL),
+		// .hCursor = LoadCursor(NULL, IDC_ARROW),
+		.style = CS_OWNDC// | CS_HREDRAW | CS_VREDRAW
+	});
+}
+
 bool track_mouse_leave(HWND hwnd) {
 	return TrackMouseEvent(& (TRACKMOUSEEVENT) {
 		.cbSize = sizeof(TRACKMOUSEEVENT),
@@ -318,10 +328,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	GetWindowRect(hwnd, &rect);
 	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
 	const bool is_maximized = IsZoomed(hwnd);
-	if (is_maximized && !is_taskbar_hidden(hwnd)) {
-		offset_maximize_rect(&rect);
-	}
-	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
+	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd); //(CaptionButton) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	const int border_width = is_maximized ? 0 : 1;
 	const int sysmenu_size = GetSystemMetrics(SM_CXSMICON);
@@ -358,8 +365,35 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				}
 			}
 
+			RECT dummy_rect = { 0, 0, 0, 0 };
+			if (register_window_class("DWindow", DefWindowProc)) {
+				HWND dummy = CreateWindow("DWindow", "Dummy Window",
+				WS_OVERLAPPED, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+				NULL, NULL, g_hmodule, NULL);
+				if (dummy != NULL) {
+					GetWindowRect(dummy, &dummy_rect);
+					DestroyWindow(dummy);
+				}
+				UnregisterClass("DWindow", g_hmodule);
+			}
+
+			if (rect.left <= 0) {
+				rect.left = dummy_rect.left;
+			}
+			// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowa
+			// rect.top might be ignore
+			if (rect.top <= 0) {
+				rect.top = dummy_rect.top;
+			}
+			if (window_size.cx < CAPTION_MENU_WIDTH*3 + border_width*2 + GetSystemMetrics(SM_CXSMICON) + LEFT_PADDING) {
+				window_size.cx = dummy_rect.right - dummy_rect.left;
+			}
+			if (window_size.cy < TITLEBAR_HEIGHT) {
+				window_size.cy = dummy_rect.bottom - dummy_rect.top;
+			}
+
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
-						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
+						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW);
 			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
 			set_is_mouse_leave(hwnd, true);
 	        break;
@@ -390,7 +424,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// 	return true;
 		// }
 		case WM_PAINT: {
-			printf("PAINT");
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint(hwnd, &ps);
 
@@ -475,10 +508,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_NCCALCSIZE: {
 			if (wparam == true) {
 				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
-				if (is_maximized && !is_taskbar_hidden(hwnd)) {
-					offset_maximize_rect(&params->rgrc[0]);
-				}
-				else {
+				if (!is_maximized || is_taskbar_hidden(hwnd)) {
 					params->rgrc[0].bottom += border_width;
 				}
 				params->rgrc[1] = params->rgrc[2];
@@ -491,15 +521,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
 		case WM_SIZE: {
 			if (wparam == SIZE_MAXIMIZED) {
-				MONITORINFO mi;
-				mi.cbSize = sizeof(MONITORINFO);
-			    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
-					SetWindowPos(hwnd, HWND_TOP,
-								mi.rcWork.left, mi.rcWork.top,
-								mi.rcWork.right - mi.rcWork.left,
-								mi.rcWork.bottom - mi.rcWork.top - is_taskbar_hidden(hwnd),	// -1 for not overlap the non-autohide taskbar (fullscreen)
-								SWP_FRAMECHANGED | SWP_NOACTIVATE);
-				}
+				set_maximize_window(hwnd);
 			}
 			else if (wparam == SIZE_RESTORED) {
 				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
@@ -674,7 +696,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		// case WM_GETMINMAXINFO: {
 		//     MINMAXINFO* mmi = (MINMAXINFO*) lparam;
-		//     mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2;
+		//     mmi->ptMinTrackSize.x = CAPTION_MENU_WIDTH*3 + border_width*2 + GetSystemMetrics(SM_CXSMICON) + LEFT_PADDING;
 		//     mmi->ptMinTrackSize.y = TITLEBAR_HEIGHT;
 		//     return 0;
 		// }
@@ -689,29 +711,21 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_WINDOWPOSCHANGING: {
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-			// wpos->flags |= SWP_NOCOPYBITS;
 			if ((wpos->flags & SWP_NOMOVE) && !(wpos->flags & SWP_NOSIZE)) {
 				wpos->flags |= SWP_NOCOPYBITS | SWP_NOREDRAW;
 				return 0;						// if not return, the old caption menu will appear
 			}
 			break;
 		}
+		case WM_SETTINGCHANGE: {
+			if (wparam == SPI_SETWORKAREA && is_maximized) {
+				set_maximize_window(hwnd);
+			}
+			break;
+		}
 	}
 
 	return DefWindowProc(hwnd, msg, wparam, lparam);
-}
-
-bool register_window_class(const char *lpszClassName, WNDPROC lpfnWndProc) {
-	return RegisterClassEx(&(WNDCLASSEX) {
-		.cbSize = sizeof(WNDCLASSEX),
-		.lpszClassName = lpszClassName,
-		.lpfnWndProc = lpfnWndProc,
-		.hIcon = LoadIcon(NULL, IDI_APPLICATION),
-		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
-		// .hInstance = GetModuleHandle(NULL),
-		// .hCursor = LoadCursor(NULL, IDC_ARROW),
-		.style = CS_OWNDC// | CS_HREDRAW | CS_VREDRAW
-	});
 }
 
 int main(void)
@@ -728,7 +742,7 @@ int main(void)
 	}
 
 	HWND window = CreateWindowEx(0 /*| WS_EX_TOOLWINDOW*/, "SWindow", "Simple Window",
-		WS_OVERLAPPED | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU,
+		WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_VISIBLE,
 		CW_USEDEFAULT, CW_USEDEFAULT, 700, 500, NULL, NULL, g_hmodule, NULL);
 	// EnableMenuItem(GetSystemMenu(window, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 	if (window == NULL) {
@@ -737,7 +751,7 @@ int main(void)
 		return 1;
 	}
 	// SetWindowPos(window, NULL, 200, 200, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-	ShowWindow(window, SW_SHOW);
+	// ShowWindow(window, SW_SHOW);
 
 	// https://devblogs.microsoft.com/oldnewthing/20060126-00/?p=32513
 	MSG msg;

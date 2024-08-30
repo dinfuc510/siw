@@ -55,21 +55,23 @@ typedef enum CaptionButton {
 static HMODULE g_hmodule;
 
 LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char i, unsigned char n) {
-	assert(i + n <= sizeof(LONG_PTR));
+	assert(i + n <= 8*sizeof(LONG_PTR));
 	return (num >> i) & ((1 << n) - 1);
 }
 
 void set_nbits_from_ith(LONG_PTR *num, unsigned char i, unsigned char n, LONG_PTR value) {
-	assert(i + n <= sizeof(LONG_PTR));
+	assert(i + n <= 8*sizeof(LONG_PTR));
 	assert((value >> n) == 0);
 	assert(num != NULL);
 	*num = (*num & ~(((1 << n) - 1) << i)) | (value << i);
 }
 
-#define CAPTION_BUTTON_BIT 			0
-#define CAPTION_BUTTON_BIT_LENGTH 	3
-#define IS_MOUSE_LEAVE_BIT 			(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
-#define IS_MOUSE_LEAVE_BIT_LENGTH 	1
+#define CAPTION_BUTTON_BIT 				0
+#define CAPTION_BUTTON_BIT_LENGTH 		3
+#define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
+#define IS_MOUSE_LEAVE_BIT_LENGTH 		1
+#define IS_LMOUSE_DOWN_TB_BIT 			(IS_MOUSE_LEAVE_BIT + IS_MOUSE_LEAVE_BIT_LENGTH)
+#define IS_LMOUSE_DOWN_TB_BIT_LENGTH 	1
 
 CaptionButton get_caption_button(HWND hwnd) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -94,6 +96,18 @@ bool get_is_mouse_leave(HWND hwnd) {
 void set_is_mouse_leave(HWND hwnd, bool flag) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	set_nbits_from_ith(&data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, flag);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
+}
+
+bool get_is_lmouse_down_tb(HWND hwnd) {
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	bool is_mouse_leave = (bool) get_nbits_from_ith(data, IS_LMOUSE_DOWN_TB_BIT, IS_LMOUSE_DOWN_TB_BIT_LENGTH);
+	return is_mouse_leave;
+}
+
+void set_is_lmouse_down_tb(HWND hwnd, bool flag) {
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	set_nbits_from_ith(&data, IS_LMOUSE_DOWN_TB_BIT, IS_LMOUSE_DOWN_TB_BIT_LENGTH, flag);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
@@ -157,7 +171,7 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 	if (hfont == NULL) {
 		HFONT def_font = GetStockObject(DEFAULT_GUI_FONT);
 		LOGFONT lf;
-		GetObject(def_font, sizeof(lf), &lf);
+		GetObject(def_font, sizeof(LOGFONT), &lf);
 		lf.lfHeight = -font_size;
 		hfont = CreateFontIndirect(&lf);
 	}
@@ -218,7 +232,7 @@ bool set_maximize_window(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
     if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
-		// for not overlap the taskbar (fullscreen)
+		// for not overlap the autohide taskbar (fullscreen)
 #ifdef DYNLINK
 		bool is_load = false;
 		HMODULE shell32 = GetModuleHandle("shell32.dll");
@@ -375,7 +389,7 @@ bool register_window_class(const char *lpszClassName, WNDPROC lpfnWndProc) {
 		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
 		// .hInstance = GetModuleHandle(NULL),
 		// .hCursor = LoadCursor(NULL, IDC_ARROW),
-		.style = CS_OWNDC// | CS_HREDRAW | CS_VREDRAW
+		.style = CS_OWNDC | CS_DBLCLKS// | CS_HREDRAW | CS_VREDRAW
 	});
 }
 
@@ -419,6 +433,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT minimize_button_border_check = minimize_button_paint_rect;
 	minimize_button_border_check.top += border_check_sensitivity;
 
+	static POINT start_drag_point;
 	switch(msg) {
 		case WM_CREATE: {
 			// HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
@@ -460,6 +475,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW);
 			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
 			set_is_mouse_leave(hwnd, true);
+			set_is_lmouse_down_tb(hwnd, false);
 	        break;
 		}
 		case WM_DESTROY: {
@@ -558,7 +574,9 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				else if (PtInRect(&minimize_button_border_check, mouse)) {
 					return HTMINBUTTON;
 				}
-				return HTCAPTION;
+				return HTCLIENT /*HTCAPTION*/;								// when not focus and hold titlebar
+																			//						(no move)
+																			// there will be a delay
 			}
 			else if (PtInRect(&client_rect, mouse)) {
 				return HTCLIENT;
@@ -627,6 +645,30 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return true;
 		}
 		case WM_MOUSEMOVE: {
+			if (get_is_lmouse_down_tb(hwnd)) {
+				POINT cur_pos = { GET_X_LPARAM(lparam) + rect.left,
+								  GET_Y_LPARAM(lparam) + rect.top };		// relative to screen
+				int delta_x = cur_pos.x - start_drag_point.x;
+				int delta_y = cur_pos.y - start_drag_point.y;
+				int new_x = rect.left + delta_x;
+				int new_y = rect.top + delta_y;
+
+				if (is_maximized && (delta_x != 0 || delta_y != 0)) {
+					WINDOWPLACEMENT placement;
+					placement.length = sizeof(WINDOWPLACEMENT);
+					GetWindowPlacement(hwnd, &placement);
+					placement.showCmd = SW_RESTORE;
+					SetWindowPlacement(hwnd, &placement);
+					SIZE new_window_size = (SIZE) {
+							placement.rcNormalPosition.right - placement.rcNormalPosition.left,
+		 					placement.rcNormalPosition.bottom - placement.rcNormalPosition.top };
+					new_x += new_window_size.cx * (cur_pos.x - rect.left)/window_size.cx;
+					new_y += new_window_size.cy * (cur_pos.y - rect.top)/window_size.cy;
+				}
+
+				SetWindowPos(hwnd, NULL, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+				start_drag_point = cur_pos;
+			}
 			if (cur_hovered_button != CaptionButton_None) {
 				InvalidateRect(hwnd, &title_bar_rect, false);
 				set_caption_button(hwnd, CaptionButton_None);
@@ -701,24 +743,21 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// https://github.com/microsoft/terminal/blob/3486111722296f287158e0340789c607642c1067/src/cascadia/TerminalApp/TitlebarControl.cpp#L97
 		case WM_NCLBUTTONUP: {
 			if (cur_hovered_button == CaptionButton_Close) {
-				// PostMessage(hwnd, WM_CLOSE, 0, 0);
 				PostMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
 				return 0;
 			}
 			else if (cur_hovered_button == CaptionButton_Minimize) {
-				// ShowWindow(hwnd, SW_MINIMIZE);
 				PostMessage(hwnd, WM_SYSCOMMAND, SC_MINIMIZE | HTMINBUTTON, 0);
 				return 0;
 			}
 			else if (cur_hovered_button == CaptionButton_Maximize) {
-				// ShowWindow(hwnd, is_maximized ? SW_RESTORE : SW_MAXIMIZE);
 				PostMessage(hwnd, WM_SYSCOMMAND, (is_maximized ? SC_RESTORE : SC_MAXIMIZE) | HTMAXBUTTON, MAKELPARAM(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)));
 				return 0;
 			}
 			break;
 		}
-		case WM_NCRBUTTONDOWN: {
-			if (wparam == HTCAPTION) {
+		case WM_RBUTTONDOWN: {
+			// if (wparam == HTCAPTION) {
 				// HMENU hmenu = CreatePopupMenu();
 				// if (hmenu != NULL) {
 				// 	POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
@@ -728,9 +767,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				// 	DestroyMenu(hmenu);
 				// }
 
+			int pos_y = GET_Y_LPARAM(lparam);
+			if (pos_y <= TITLEBAR_HEIGHT) {
 				HMENU hmenu = GetSystemMenu(hwnd, false);
 				if (hmenu != NULL) {
-					POINT menu_pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+					POINT menu_pos = { GET_X_LPARAM(lparam) + rect.left, pos_y + rect.top };
 					int cmd = TrackPopupMenuEx(hmenu,
 							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
 							menu_pos.x, menu_pos.y, hwnd, NULL);
@@ -740,6 +781,33 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				}
 			}
 			return 0;
+		}
+		case WM_LBUTTONDOWN: {
+			if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
+				set_is_lmouse_down_tb(hwnd, true);
+				GetCursorPos(&start_drag_point);
+				SetCapture(hwnd);
+				// SetCursor(LoadCursor(NULL, IDC_SIZEALL));
+			}
+			break;
+		}
+		case WM_LBUTTONUP: {
+			ReleaseCapture();
+			break;
+		}
+		case WM_CAPTURECHANGED: {
+			set_is_lmouse_down_tb(hwnd, (HWND)lparam == hwnd);
+			break;
+		}
+		case WM_LBUTTONDBLCLK: {
+			if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
+				WINDOWPLACEMENT placement;
+				placement.length = sizeof(WINDOWPLACEMENT);
+				GetWindowPlacement(hwnd, &placement);
+				placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
+				SetWindowPlacement(hwnd, &placement);
+			}
+			break;
 		}
 		case WM_INITMENUPOPUP: {
 			bool is_system_menu = HIWORD(lparam);
@@ -768,14 +836,15 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
-		case WM_WINDOWPOSCHANGING: {
-			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-			if ((wpos->flags & SWP_NOMOVE) && !(wpos->flags & SWP_NOSIZE)) {
-				wpos->flags |= SWP_NOCOPYBITS | SWP_NOREDRAW;
-				return 0;						// if not return, the old caption menu will appear
-			}
-			break;
-		}
+		// case WM_WINDOWPOSCHANGED:
+		// case WM_WINDOWPOSCHANGING: {
+		// 	WINDOWPOS* wpos = (WINDOWPOS*) lparam;
+		// 	if (!(wpos->flags & SWP_NOMOVE) && (wpos->flags & SWP_NOSIZE)) {
+		// 		wpos->flags |= SWP_NOCOPYBITS | SWP_NOREDRAW;
+		// 		// return 0;						// if not return, the old caption menu will appear
+		// 	}
+		// 	break;
+		// }
 		case WM_SETTINGCHANGE: {
 			if (wparam == SPI_SETWORKAREA && is_maximized) {
 				set_maximize_window(hwnd);

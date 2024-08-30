@@ -282,7 +282,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	const RECT sysmenu_paint_rect = { sysmenu_clickable_rect.left - expand_size, sysmenu_clickable_rect.top - expand_size,
 									sysmenu_clickable_rect.right + expand_size, sysmenu_clickable_rect.bottom + expand_size };
 	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
-	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width*2 };
+	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
 	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
 											window_size.cx - border_width, TITLEBAR_HEIGHT };
 	RECT maximize_button_paint_rect = close_button_paint_rect;
@@ -315,6 +315,16 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				}
 			}
 #endif
+			HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
+			if (uxtheme != NULL) {
+				FARPROC SetWindowTheme = GetProcAddress(uxtheme, "SetWindowTheme");
+				if (SetWindowTheme != NULL) {
+					SetWindowTheme(hwnd, NULL, NULL);					// turn off theme
+				}
+			}
+
+
+			(void) GetSystemMenu(hwnd, false);		// trigger the program create system menu
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
 						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
 			set_is_mouse_leave(hwnd, true);
@@ -340,17 +350,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return true;
 		}
 		// case WM_NCPAINT: {
-		// 	return false;
-		// }
-		// case WM_NCCREATE: {
-		// 	HMODULE uxtheme = LoadLibrary("uxtheme.dll");
-		// 	if (uxtheme != NULL) {
-		// 		printf("HELLO UXTHE\n");
-		// 		HRESULT (*SetWindowTheme) (HWND, char*, char*) = GetProcAddress(uxtheme, "SetWindowTheme");
-		// 		SetWindowTheme(hwnd, " ", " ");
-		// 		FreeLibrary(uxtheme);
-		// 	}
-		// 	break;
+		// 	return true;
 		// }
 		case WM_PAINT: {
 			PAINTSTRUCT ps;
@@ -363,8 +363,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			const int cx = ps.rcPaint.right - ps.rcPaint.left, cy = ps.rcPaint.bottom - ps.rcPaint.top;
 			HDC memdc = CreateCompatibleDC(hdc);
 			HBITMAP membmp = CreateCompatibleBitmap(hdc, cx, cy);
-			assert(memdc != NULL && "ERROR: could not create the memory device context\n");
-			assert(membmp != NULL && "ERROR: could not create the memory bitmap\n");
+			assert(memdc != NULL && "ERROR: could not create the memory device context");
+			assert(membmp != NULL && "ERROR: could not create the memory bitmap");
 
 			HGDIOBJ oldbmp = SelectObject(memdc, membmp);
 			POINT old_point;
@@ -434,13 +434,15 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		// https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag
 		case WM_NCCALCSIZE: {
-			if (wparam) {
+			if (wparam == true) {
 				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
 				params->rgrc[0].right -= border_width;
 				params->rgrc[0].bottom -= border_width;
-				return /*0*/ WVR_VALIDRECTS;			// make the resize smoothly
+				return WVR_VALIDRECTS;			// make the resize smoothly
 			}
-			break;
+			return 0;							// disable default behaviour
+												// when right click menu shown,
+												// an old style caption button appear
 		}
 		// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
 		case WM_SIZE: {

@@ -56,48 +56,34 @@ typedef enum CaptionButton {
 	CaptionButton_Sysmenu,
 } CaptionButton;
 
-LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char i, unsigned char n) {
-	assert(i + n <= 8*sizeof(LONG_PTR));
-	return (num >> i) & ((1 << n) - 1);
+LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char start, unsigned char count) {
+	assert(start + count <= 8*sizeof(LONG_PTR));
+	return (num >> start) & ((1 << count) - 1);
 }
 
-void set_nbits_from_ith(LONG_PTR *num, unsigned char i, unsigned char n, LONG_PTR value) {
-	assert(i + n <= 8*sizeof(LONG_PTR));
-	assert((value >> n) == 0);
+void set_nbits_from_ith(LONG_PTR *num, unsigned char start, unsigned char count, LONG_PTR value) {
+	assert(start + count <= 8*sizeof(LONG_PTR));
+	assert((value >> count) == 0);
 	assert(num != NULL);
-	*num = (*num & ~(((1 << n) - 1) << i)) | (value << i);
+	*num = (*num & ~(((1 << count) - 1) << start)) | (value << start);
+}
+
+LONG_PTR get_prop(HWND hwnd, unsigned char start, unsigned char count) {
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	LONG_PTR prop = get_nbits_from_ith(data, start, count);
+	return prop;
+}
+
+void set_prop(HWND hwnd, unsigned char start, unsigned char count, LONG_PTR value) {
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	set_nbits_from_ith(&data, start, count, value);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
 #define CAPTION_BUTTON_BIT 				0
 #define CAPTION_BUTTON_BIT_LENGTH 		3
 #define IS_MOUSE_LEAVE_BIT 				(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
 #define IS_MOUSE_LEAVE_BIT_LENGTH 		1
-
-CaptionButton get_caption_button(HWND hwnd) {
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	CaptionButton button = (CaptionButton) get_nbits_from_ith(data, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
-	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
-	return button;
-}
-
-void set_caption_button(HWND hwnd, CaptionButton button) {
-	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	set_nbits_from_ith(&data, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, button);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
-}
-
-bool get_is_mouse_leave(HWND hwnd) {
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	bool is_mouse_leave = (bool) get_nbits_from_ith(data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH);
-	return is_mouse_leave;
-}
-
-void set_is_mouse_leave(HWND hwnd, bool flag) {
-	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	set_nbits_from_ith(&data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, flag);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
-}
 
 // NOTE: Both bg and fg are in rgb
 unsigned long blend_color(unsigned long bg, unsigned long fg, unsigned char alpha) {
@@ -244,7 +230,7 @@ bool set_maximize_window(HWND hwnd) {
 // https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613
 static void on_draw(HWND hwnd, HDC hdc) {
 	const bool has_focus = !!GetFocus();
-	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
+	const CaptionButton cur_hovered_button = (CaptionButton) get_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
 	const bool is_maximized = IsZoomed(hwnd);
 
 	RECT rect;
@@ -369,10 +355,10 @@ bool track_mouse_leave(HWND hwnd) {
 static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
+	const bool is_mouse_leave = (bool) get_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH);
 	const bool is_maximized = IsZoomed(hwnd);
 	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
-	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
+	const CaptionButton cur_hovered_button = (CaptionButton) get_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
 	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
 	const SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
 	const int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
@@ -432,7 +418,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
 						SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW | SWP_NOCOPYBITS);
 			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
-			set_is_mouse_leave(hwnd, true);
+			set_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, true);
 	        break;
 		}
 		case WM_DESTROY: {
@@ -444,7 +430,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_ACTIVATE: {
 			if (LOWORD(wparam) == WA_INACTIVE) {
 				if (cur_hovered_button != CaptionButton_None) {
-					set_caption_button(hwnd, CaptionButton_None);
+					set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, CaptionButton_None);
 				}
 			}
 			InvalidateRect(hwnd, &title_bar_rect, false);
@@ -606,20 +592,20 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			}
 			if (cur_hovered_button != CaptionButton_None) {
 				InvalidateRect(hwnd, &title_bar_rect, false);
-				set_caption_button(hwnd, CaptionButton_None);
+				set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, CaptionButton_None);
 			}
 			break;
 		}
 		case WM_NCMOUSELEAVE: {
 			if (!is_mouse_leave) {
-				set_is_mouse_leave(hwnd, true);
+				set_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, true);
 				if (cur_hovered_button != CaptionButton_None) {
 					InvalidateRect(hwnd, &close_button_paint_rect, false);
 			        InvalidateRect(hwnd, &minimize_button_paint_rect, false);
 			        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 			        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
 			        // InvalidateRect(hwnd, &title_bar_rect, false);
-					set_caption_button(hwnd, CaptionButton_None);
+					set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, CaptionButton_None);
 				}
 			}
 			break;
@@ -627,7 +613,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_NCMOUSEMOVE: {
 			if (is_mouse_leave) {
 				track_mouse_leave(hwnd);
-				set_is_mouse_leave(hwnd, false);
+				set_prop(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, false);
 			}
 			int hit_test = wparam;
 			CaptionButton new_hovered_button = CaptionButton_None;
@@ -650,7 +636,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		        InvalidateRect(hwnd, &maximize_button_paint_rect, false);
 		        InvalidateRect(hwnd, &sysmenu_paint_rect, false);
 		        // InvalidateRect(hwnd, &title_bar_rect, false);
-		        set_caption_button(hwnd, new_hovered_button);
+		        set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, new_hovered_button);
 			}
 			break;
 		}
@@ -670,7 +656,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				clicked_button = CaptionButton_Sysmenu;
 			}
 			if (clicked_button != CaptionButton_None) {
-		        set_caption_button(hwnd, clicked_button);
+		        set_prop(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, clicked_button);
 		        if (clicked_button != CaptionButton_Sysmenu) {
 					return 0;		// skip default behaviour of caption buttons except sysmenu
 				}

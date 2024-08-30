@@ -220,61 +220,29 @@ bool is_taskbar_hidden(HWND hwnd) {
 	return false;
 }
 
-// #define DYNLINK
-
-#ifndef DYNLINK
-	#if _MSC_VER && !defined(__INTEL_COMPILER)
-		#pragma comment(lib, "shell32.lib")
-	#endif
-#endif
-
 bool set_maximize_window(HWND hwnd) {
 	MONITORINFO mi;
 	mi.cbSize = sizeof(MONITORINFO);
     if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
 		// for not overlap the autohide taskbar (fullscreen)
-#ifdef DYNLINK
-		bool is_load = false;
-		HMODULE shell32 = GetModuleHandle("shell32.dll");
-		if (shell32 == NULL || shell32 == INVALID_HANDLE_VALUE) {
-			shell32 = LoadLibrary("shell32.dll");
-			is_load = true;
+    	APPBARDATA abd;
+		abd.cbSize = sizeof(APPBARDATA);
+		abd.uEdge = ABE_BOTTOM;
+		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+			mi.rcWork.bottom -= 1;
 		}
-		if (shell32 != NULL && shell32 != INVALID_HANDLE_VALUE) {
-			FARPROC SHAppBarMessage = GetProcAddress(shell32, "SHAppBarMessage");
-			if (SHAppBarMessage != NULL) {
-#endif
-		    	APPBARDATA abd;
-				abd.cbSize = sizeof(APPBARDATA);
-				abd.uEdge = ABE_BOTTOM;
-				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-					mi.rcWork.bottom -= 1;
-				}
-				abd.uEdge = ABE_RIGHT;
-				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-					mi.rcWork.right -= 1;
-				}
-				abd.uEdge = ABE_TOP;
-				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-					mi.rcWork.top += 1;
-				}
-				abd.uEdge = ABE_LEFT;
-				if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
-					mi.rcWork.left += 1;
-				}
-#ifdef DYNLINK
-			}
-			else {
-				fprintf(stderr, "WARNING: could not get SHAppBarMessage\n");
-			}
-			if (is_load) {
-				FreeLibrary(shell32);
-			}
+		abd.uEdge = ABE_RIGHT;
+		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+			mi.rcWork.right -= 1;
 		}
-		else {
-			fprintf(stderr, "WARNING: could not get shell32.dll\n");
+		abd.uEdge = ABE_TOP;
+		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+			mi.rcWork.top += 1;
 		}
-#endif
+		abd.uEdge = ABE_LEFT;
+		if ((HWND) SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != NULL) {
+			mi.rcWork.left += 1;
+		}
 		return SetWindowPos(hwnd, NULL,
 						mi.rcWork.left, mi.rcWork.top,
 						mi.rcWork.right - mi.rcWork.left,
@@ -389,7 +357,7 @@ bool register_window_class(const char *lpszClassName, WNDPROC lpfnWndProc) {
 		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
 		// .hInstance = GetModuleHandle(NULL),
 		// .hCursor = LoadCursor(NULL, IDC_ARROW),
-		.style = CS_OWNDC | CS_DBLCLKS// | CS_HREDRAW | CS_VREDRAW
+		.style = CS_OWNDC //| CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW
 	});
 }
 
@@ -434,6 +402,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	minimize_button_border_check.top += border_check_sensitivity;
 
 	static POINT start_drag_point;
+	static int click_count = 0;
+	static DWORD last_time_click = 0;
 	switch(msg) {
 		case WM_CREATE: {
 			// HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
@@ -664,6 +634,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		 					placement.rcNormalPosition.bottom - placement.rcNormalPosition.top };
 					new_x += new_window_size.cx * (cur_pos.x - rect.left)/window_size.cx;
 					new_y += new_window_size.cy * (cur_pos.y - rect.top)/window_size.cy;
+					click_count = 0;
 				}
 
 				SetWindowPos(hwnd, NULL, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
@@ -785,7 +756,27 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_LBUTTONDOWN: {
 			if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
 				set_is_lmouse_down_tb(hwnd, true);
-				GetCursorPos(&start_drag_point);
+
+				// https://devblogs.microsoft.com/oldnewthing/20041018-00/?p=37543
+				POINT pt;
+				GetCursorPos(&pt);
+				DWORD time_click = GetMessageTime();
+				RECT clicked_rect = { start_drag_point.x, start_drag_point.y, start_drag_point.x, start_drag_point.y };
+				InflateRect(&clicked_rect, GetSystemMetrics(SM_CXDOUBLECLK) / 2, GetSystemMetrics(SM_CYDOUBLECLK) / 2);
+				if (!PtInRect(&clicked_rect, pt) || time_click - last_time_click > GetDoubleClickTime() || click_count >= 2) {
+					click_count = 0;
+				}
+				last_time_click = time_click;
+				click_count++;
+				if (click_count == 2) {
+					WINDOWPLACEMENT placement;
+					placement.length = sizeof(WINDOWPLACEMENT);
+					GetWindowPlacement(hwnd, &placement);
+					placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
+					SetWindowPlacement(hwnd, &placement);
+				}
+
+				start_drag_point = (POINT) { pt.x, pt.y };
 				SetCapture(hwnd);
 				// SetCursor(LoadCursor(NULL, IDC_SIZEALL));
 			}
@@ -799,16 +790,16 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			set_is_lmouse_down_tb(hwnd, (HWND)lparam == hwnd);
 			break;
 		}
-		case WM_LBUTTONDBLCLK: {
-			if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
-				WINDOWPLACEMENT placement;
-				placement.length = sizeof(WINDOWPLACEMENT);
-				GetWindowPlacement(hwnd, &placement);
-				placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
-				SetWindowPlacement(hwnd, &placement);
-			}
-			break;
-		}
+		// case WM_LBUTTONDBLCLK: {
+		// 	if (GET_Y_LPARAM(lparam) <= TITLEBAR_HEIGHT) {
+		// 		WINDOWPLACEMENT placement;
+		// 		placement.length = sizeof(WINDOWPLACEMENT);
+		// 		GetWindowPlacement(hwnd, &placement);
+		// 		placement.showCmd = is_maximized ? SW_RESTORE : SW_MAXIMIZE;
+		// 		SetWindowPlacement(hwnd, &placement);
+		// 	}
+		// 	break;
+		// }
 		case WM_INITMENUPOPUP: {
 			bool is_system_menu = HIWORD(lparam);
 			HMENU hmenu = (HMENU) wparam;

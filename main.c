@@ -1,10 +1,35 @@
-// #define _WIN32_WINNT 0x0500		// Windows 2000 Professional
+// #define _WIN32_WINNT 	0x500
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x500
+	#error "ERROR: _WIN32_WINNT must be defined and at least 0x500"
+	/*
+		...
+		#define _WIN32_WINNT 0x500
+		#include <windows.h>
+		...
+	*/
+#endif
+
+#ifndef GCLP_HICONSM
+	#define GCLP_HICONSM 		(-34)
+#endif
+
+#ifndef GetClassLongPtr
+	#ifndef GetClassLong
+		#error "ERROR: GetClassLong(Ptr) function not defined"
+	#endif
+	#define GetClassLongPtr		GetClassLong
+#endif
+
+#ifndef TME_NONCLIENT
+	#define TME_NONCLIENT 		0x00000010
+#endif
 
 #ifndef GET_X_LPARAM
 #define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
@@ -29,42 +54,42 @@ typedef enum CaptionButton {
 
 static HMODULE g_hmodule;
 
-long get_nbits_from_ith(long num, unsigned char i, unsigned char n) {
-	assert(i + n <= sizeof(long));
+LONG_PTR get_nbits_from_ith(LONG_PTR num, unsigned char i, unsigned char n) {
+	assert(i + n <= sizeof(LONG_PTR));
 	return (num >> i) & ((1 << n) - 1);
 }
 
-void set_nbits_from_ith(long *num, unsigned char i, unsigned char n, long value) {
-	assert(i + n <= sizeof(long));
-	assert(value < (1 << n));
+void set_nbits_from_ith(LONG_PTR *num, unsigned char i, unsigned char n, LONG_PTR value) {
+	assert(i + n <= sizeof(LONG_PTR));
+	assert((value >> n) == 0);
 	assert(num != NULL);
 	*num = (*num & ~((1 << n) - 1) << i) | (value << i);
 }
 
 CaptionButton get_caption_button(HWND hwnd) {
-	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	CaptionButton button = (CaptionButton) get_nbits_from_ith(data, 0, 3);
-	assert(CaptionButton_None <= button && button <= CaptionButton_Sysmenu);
+	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
 	return button;
 }
 
 void set_caption_button(HWND hwnd, CaptionButton button) {
-	assert(CaptionButton_None <= button && button <= CaptionButton_Sysmenu);
-	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	set_nbits_from_ith(&data, 0, 3, button);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) data);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
 bool get_is_mouse_leave(HWND hwnd) {
-	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	bool is_mouse_leave = (bool) get_nbits_from_ith(data, 3, 1);
 	return is_mouse_leave;
 }
 
 void set_is_mouse_leave(HWND hwnd, bool flag) {
-	long data = (long) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	set_nbits_from_ith(&data, 3, 1, flag);
-	SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR) data);
+	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
 // NOTE: Both bg and fg are in rgb
@@ -188,9 +213,9 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		left_padding += sysmenu_size + expand_size + 1;
 	}
 	{
-		const int length = GetWindowTextLength(hwnd) + 1;
+		const int length = GetWindowTextLength(hwnd);
 		char text[MAX_PATH];
-		GetWindowText(hwnd, text, length);
+		GetWindowText(hwnd, text, length + 1);
 		left_padding += dr_caption(hdc, text, length, (RECT){ left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
 	}
 
@@ -236,7 +261,6 @@ static void on_draw(HWND hwnd, HDC hdc) {
 	}
 }
 
-// #define TME_NONCLIENT 0x00000010
 bool track_mouse_leave(HWND hwnd) {
 	return TrackMouseEvent(& (TRACKMOUSEEVENT) {
 		.cbSize = sizeof(TRACKMOUSEEVENT),
@@ -276,6 +300,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	minimize_button_border_check.top += border_check_sensitivity;
 
 	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
+	const bool is_maximized = IsZoomed(hwnd);
 
 	switch(msg) {
 		case WM_CREATE: {
@@ -314,6 +339,19 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			lparam = -1;
 			return true;
 		}
+		// case WM_NCPAINT: {
+		// 	return false;
+		// }
+		// case WM_NCCREATE: {
+		// 	HMODULE uxtheme = LoadLibrary("uxtheme.dll");
+		// 	if (uxtheme != NULL) {
+		// 		printf("HELLO UXTHE\n");
+		// 		HRESULT (*SetWindowTheme) (HWND, char*, char*) = GetProcAddress(uxtheme, "SetWindowTheme");
+		// 		SetWindowTheme(hwnd, " ", " ");
+		// 		FreeLibrary(uxtheme);
+		// 	}
+		// 	break;
+		// }
 		case WM_PAINT: {
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint(hwnd, &ps);
@@ -347,7 +385,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			POINT mouse = { GET_X_LPARAM(lparam) - rect.left, GET_Y_LPARAM(lparam) - rect.top };
 			const int border_width_check = border_width + border_check_sensitivity;
 
-			if (!IsZoomed(hwnd)) {
+			if (!is_maximized) {
 				if (mouse.x < border_width_check && mouse.y < border_width_check) {
 					return HTTOPLEFT;
 				}
@@ -407,7 +445,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
 		case WM_SIZE: {
 			if (wparam == SIZE_MAXIMIZED) {
-				MONITORINFO mi = { sizeof(mi) };
+				MONITORINFO mi;
+				mi.cbSize = sizeof(MONITORINFO);
 			    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
 					SetWindowPos(hwnd, HWND_TOP,
 								mi.rcMonitor.left, mi.rcMonitor.top,
@@ -544,8 +583,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				return 0;
 			}
 			else if (cur_hovered_button == CaptionButton_Maximize) {
-				ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
-				// PostMessage(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE | HTMAXBUTTON, MAKELPARAM(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)));
+				// ShowWindow(hwnd, is_maximized ? SW_RESTORE : SW_MAXIMIZE);
+				PostMessage(hwnd, WM_SYSCOMMAND, (is_maximized ? SC_RESTORE : SC_MAXIMIZE) | HTMAXBUTTON, MAKELPARAM(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)));
 				return 0;
 			}
 			break;
@@ -563,11 +602,6 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 				HMENU hmenu = GetSystemMenu(hwnd, false);
 				if (hmenu != NULL) {
-					EnableMenuItem(hmenu, SC_MAXIMIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
-					EnableMenuItem(hmenu, SC_RESTORE, !IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
-					EnableMenuItem(hmenu, SC_SIZE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
-					EnableMenuItem(hmenu, SC_MOVE, IsZoomed(hwnd) ? MF_GRAYED : MF_ENABLED);
-
 					POINT menu_pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
 					int cmd = TrackPopupMenuEx(hmenu,
 							TPM_RIGHTBUTTON | TPM_RETURNCMD | (GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 ? TPM_LEFTALIGN : TPM_RIGHTALIGN),
@@ -578,6 +612,18 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 				}
 			}
 			return 0;
+		}
+		case WM_INITMENUPOPUP: {
+			bool is_system_menu = HIWORD(lparam);
+			HMENU hmenu = (HMENU) wparam;
+			if (is_system_menu || GetSystemMenu(hwnd, false) == hmenu) {
+				EnableMenuItem(hmenu, SC_MAXIMIZE, is_maximized ? MF_GRAYED : MF_ENABLED);
+				EnableMenuItem(hmenu, SC_RESTORE, !is_maximized ? MF_GRAYED : MF_ENABLED);
+				EnableMenuItem(hmenu, SC_SIZE, is_maximized ? MF_GRAYED : MF_ENABLED);
+				EnableMenuItem(hmenu, SC_MOVE, is_maximized ? MF_GRAYED : MF_ENABLED);
+				return 0;
+			}
+			break;
 		}
 		// case WM_GETMINMAXINFO: {
 		//     MINMAXINFO* mmi = (MINMAXINFO*) lparam;
@@ -632,7 +678,7 @@ int main(void)
 		return 1;
 	}
 
-	if (!register_window_class("SWindow", win_proc)) {
+	if (!register_window_class("SWindow", (WNDPROC) win_proc)) {
 		fprintf(stderr, "ERROR: could not register class: %ld\n", GetLastError());
 		return 1;
 	}

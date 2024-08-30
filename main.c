@@ -179,15 +179,41 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 	return text_size_px.cx + ellipsis_width_px;
 }
 
+void offset_maximize_rect(RECT *rect) {
+	int frame_x = GetSystemMetrics(SM_CXFRAME);
+	int frame_y = GetSystemMetrics(SM_CYFRAME);
+#ifdef SM_CXPADDEDBORDER
+	int pad = GetSystemMetrics(SM_CXPADDEDBORDER);
+	frame_x += pad;
+	frame_y += pad;
+#endif
+	rect->left += frame_x;
+	rect->top += frame_y;
+	rect->right -= frame_x;
+	rect->bottom -= frame_y;
+}
+
+bool is_taskbar_hidden(HWND hwnd) {
+	MONITORINFO mi;
+	mi.cbSize = sizeof(MONITORINFO);
+    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+    	return EqualRect(&mi.rcWork, &mi.rcMonitor);
+	}
+	return false;
+}
+
 static void on_draw(HWND hwnd, HDC hdc) {
 	const bool has_focus = !!GetFocus();
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd);
+	const bool is_maximized = IsZoomed(hwnd);
 
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
+	if (is_maximized && !is_taskbar_hidden(hwnd)) {
+		offset_maximize_rect(&rect);
+	}
 	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
-	const bool is_maximized = IsZoomed(hwnd);
 	const int border_width = is_maximized ? 0 : 1;
 	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; //bgr 0x4f4f4f 0x2f2f2f 0xb16300
 	static unsigned long border_color = 0x4f4f4f;
@@ -237,8 +263,8 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		left_padding += dr_caption(hdc, text, length, (RECT){ left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
 	}
 
-	int right_padding = window_size.cx - border_width - CAPTION_MENU_WIDTH;
 	const SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
+	int right_padding = window_size.cx - border_width - button_size.cx;
 	POINT button_center = { right_padding + button_size.cx/2, border_width + button_size.cy/2 };
 	const int caption_icon_size = 10;
 	{
@@ -246,8 +272,8 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Close ? 0x2311e8 : title_bar_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2, button_center.x + caption_icon_size/2 + 1, button_center.y + caption_icon_size/2 + 1, 1, close_button_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y + caption_icon_size/2, button_center.x + caption_icon_size/2 + 1, button_center.y - caption_icon_size/2 - 1, 1, close_button_color);
-		right_padding -= CAPTION_MENU_WIDTH;
-		button_center.x -= CAPTION_MENU_WIDTH;
+		right_padding -= button_size.cx;
+		button_center.x -= button_size.cx;
 	}
 	{
 		const unsigned long maximize_button_color = cur_hovered_button == CaptionButton_Maximize ? 0xffffff : foreground_color;
@@ -267,15 +293,15 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		SelectObject(hdc, oldpen);
 		DeleteObject(pen);
 
-		right_padding -= CAPTION_MENU_WIDTH;
-		button_center.x -= CAPTION_MENU_WIDTH;
+		right_padding -= button_size.cx;
+		button_center.x -= button_size.cx;
 	}
 	{
 		const unsigned long minimize_button_color = cur_hovered_button == CaptionButton_Minimize ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Minimize ? 0x1a1a1a : title_bar_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y, button_center.x + caption_icon_size/2, button_center.y, 1, minimize_button_color);
-		right_padding -= CAPTION_MENU_WIDTH;
-		button_center.x -= CAPTION_MENU_WIDTH;
+		right_padding -= button_size.cx;
+		button_center.x -= button_size.cx;
 	}
 }
 
@@ -290,11 +316,14 @@ bool track_mouse_leave(HWND hwnd) {
 static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
 	const bool is_maximized = IsZoomed(hwnd);
+	if (is_maximized && !is_taskbar_hidden(hwnd)) {
+		offset_maximize_rect(&rect);
+	}
+	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd); //(CaptionButton) GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	const int border_width = IsZoomed(hwnd) ? 0 : 1;
+	const int border_width = is_maximized ? 0 : 1;
 	const int sysmenu_size = GetSystemMetrics(SM_CXSMICON);
 	const RECT sysmenu_clickable_rect = { LEFT_PADDING, border_width + (TITLEBAR_HEIGHT-border_width)/2 - sysmenu_size/2,
 										LEFT_PADDING+sysmenu_size, border_width + (TITLEBAR_HEIGHT-border_width)/2 + sysmenu_size/2 };
@@ -361,6 +390,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		// 	return true;
 		// }
 		case WM_PAINT: {
+			printf("PAINT");
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint(hwnd, &ps);
 
@@ -445,7 +475,12 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_NCCALCSIZE: {
 			if (wparam == true) {
 				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
-				params->rgrc[0].bottom += is_maximized ? 0 : border_width;
+				if (is_maximized && !is_taskbar_hidden(hwnd)) {
+					offset_maximize_rect(&params->rgrc[0]);
+				}
+				else {
+					params->rgrc[0].bottom += border_width;
+				}
 				params->rgrc[1] = params->rgrc[2];
 				return WVR_VALIDRECTS;			// make the resize smoothly
 			}
@@ -462,14 +497,14 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 					SetWindowPos(hwnd, HWND_TOP,
 								mi.rcWork.left, mi.rcWork.top,
 								mi.rcWork.right - mi.rcWork.left,
-								mi.rcWork.bottom - mi.rcWork.top - 1,	// -1 for not overlap the taskbar (fullscreen)
-								SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOREDRAW);
+								mi.rcWork.bottom - mi.rcWork.top - is_taskbar_hidden(hwnd),	// -1 for not overlap the non-autohide taskbar (fullscreen)
+								SWP_FRAMECHANGED | SWP_NOACTIVATE);
 				}
 			}
 			else if (wparam == SIZE_RESTORED) {
 				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
 							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-							SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOREDRAW);
+							SWP_FRAMECHANGED | SWP_NOACTIVATE);
 			}
 			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
 			InvalidateRect(hwnd, NULL, false);
@@ -654,7 +689,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_WINDOWPOSCHANGING: {
 			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
-			wpos->flags |= SWP_NOCOPYBITS /*| SWP_NOREDRAW*/;		// problem with windows xp
+			// wpos->flags |= SWP_NOCOPYBITS;
+			if ((wpos->flags & SWP_NOMOVE) && !(wpos->flags & SWP_NOSIZE)) {
+				wpos->flags |= SWP_NOCOPYBITS | SWP_NOREDRAW;
+				return 0;						// if not return, the old caption menu will appear
+			}
 			break;
 		}
 	}

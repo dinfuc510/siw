@@ -21,10 +21,9 @@
 #endif
 
 #ifndef GetClassLongPtr
-	#ifndef GetClassLong
-		#error "ERROR: GetClassLong(Ptr) function not defined"
+	#ifdef GetClassLong
+		#define GetClassLongPtr	GetClassLong
 	#endif
-	#define GetClassLongPtr		GetClassLong
 #endif
 
 #ifndef TME_NONCLIENT
@@ -63,12 +62,17 @@ void set_nbits_from_ith(LONG_PTR *num, unsigned char i, unsigned char n, LONG_PT
 	assert(i + n <= sizeof(LONG_PTR));
 	assert((value >> n) == 0);
 	assert(num != NULL);
-	*num = (*num & ~((1 << n) - 1) << i) | (value << i);
+	*num = (*num & ~(((1 << n) - 1) << i)) | (value << i);
 }
+
+#define CAPTION_BUTTON_BIT 			0
+#define CAPTION_BUTTON_BIT_LENGTH 	3
+#define IS_MOUSE_LEAVE_BIT 			(CAPTION_BUTTON_BIT + CAPTION_BUTTON_BIT_LENGTH)
+#define IS_MOUSE_LEAVE_BIT_LENGTH 	1
 
 CaptionButton get_caption_button(HWND hwnd) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	CaptionButton button = (CaptionButton) get_nbits_from_ith(data, 0, 3);
+	CaptionButton button = (CaptionButton) get_nbits_from_ith(data, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
 	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
 	return button;
 }
@@ -76,19 +80,19 @@ CaptionButton get_caption_button(HWND hwnd) {
 void set_caption_button(HWND hwnd, CaptionButton button) {
 	assert(/*CaptionButton_None <= button &&*/ button <= CaptionButton_Sysmenu);
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	set_nbits_from_ith(&data, 0, 3, button);
+	set_nbits_from_ith(&data, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH, button);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
 bool get_is_mouse_leave(HWND hwnd) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	bool is_mouse_leave = (bool) get_nbits_from_ith(data, 3, 1);
+	bool is_mouse_leave = (bool) get_nbits_from_ith(data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH);
 	return is_mouse_leave;
 }
 
 void set_is_mouse_leave(HWND hwnd, bool flag) {
 	LONG_PTR data = GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	set_nbits_from_ith(&data, 3, 1, flag);
+	set_nbits_from_ith(&data, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH, flag);
 	SetWindowLongPtr(hwnd, GWLP_USERDATA, data);
 }
 
@@ -132,6 +136,14 @@ int dr_caption(HDC hdc, const char *text, int length, RECT bounds, unsigned long
 	HFONT hfont = CreateFont(-font_size, 0, 0, 0, FW_NORMAL, 0, 0, 0,
 							DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
 							DEFAULT_QUALITY, DEFAULT_PITCH, font_family);
+	if (hfont == NULL) {
+		HFONT def_font = GetStockObject(DEFAULT_GUI_FONT);
+		LOGFONT lf;
+		GetObject(def_font, sizeof(lf), &lf);
+		lf.lfHeight = -font_size;
+		hfont = CreateFontIndirect(&lf);
+	}
+	assert(hfont != NULL && "ERROR: could not create font");
 	HGDIOBJ oldfont = SelectObject(hdc, hfont);
 
 	SIZE text_size_px;
@@ -200,7 +212,13 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		const int sysmenu_size = GetSystemMetrics(SM_CXSMICON);
 		const unsigned long sysmenu_color = cur_hovered_button == CaptionButton_Sysmenu ?
 											blend_color(title_bar_color, foreground_color, 20) : title_bar_color;
-		HICON sysmenu_icon = (HICON) GetClassLongPtr(hwnd, GCLP_HICONSM); //LoadIcon(NULL, IDI_APPLICATION);
+		HICON sysmenu_icon = NULL;
+#ifdef GetClassLongPtr
+		sysmenu_icon = (HICON) GetClassLongPtr(hwnd, GCLP_HICONSM);
+#endif
+		if (sysmenu_icon == NULL) {
+			sysmenu_icon = LoadIcon(NULL, IDI_APPLICATION);
+		}
 		assert(sysmenu_icon != NULL && "ERROR: could not load sysmenu icon");
 		const int expand_size = 4;
 		dr_rect(hdc, left_padding - expand_size, border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size + expand_size*2)/2,
@@ -273,6 +291,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
 	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
+	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
+	const bool is_maximized = IsZoomed(hwnd);
 	const CaptionButton cur_hovered_button = get_caption_button(hwnd); //(CaptionButton) GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	const int border_width = IsZoomed(hwnd) ? 0 : 1;
 	const int sysmenu_size = GetSystemMetrics(SM_CXSMICON);
@@ -290,7 +310,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT minimize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&minimize_button_paint_rect, -CAPTION_MENU_WIDTH*2, 0);
 
-	static int border_check_sensitivity = 4;
+	const int border_check_sensitivity = is_maximized ? 0 : 4;
 	RECT close_button_border_check = close_button_paint_rect;
 	close_button_border_check.top += border_check_sensitivity;
 	close_button_border_check.right -= border_check_sensitivity;
@@ -299,33 +319,19 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT minimize_button_border_check = minimize_button_paint_rect;
 	minimize_button_border_check.top += border_check_sensitivity;
 
-	const bool is_mouse_leave = get_is_mouse_leave(hwnd);
-	const bool is_maximized = IsZoomed(hwnd);
-
 	switch(msg) {
 		case WM_CREATE: {
-#if 0 		// sometimes, the window has rounded border (windows xp theme)
-			MONITORINFO mi;
-			mi.cbSize = sizeof(mi);
-		    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
-				HRGN hrgn = CreateRectRgn(mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
-				if (hrgn != NULL) {
-					SetWindowRgn(hwnd, hrgn, false);
-					DeleteObject(hrgn);
-				}
-			}
-#endif
-			HMODULE uxtheme = GetModuleHandle("uxtheme.dll");			// so we dont need to link uxtheme (-luxtheme)
-			if (uxtheme != NULL) {
+			HMODULE uxtheme = GetModuleHandle("uxtheme.dll");	// so we dont need to link uxtheme (-luxtheme)
+			if (uxtheme != NULL) {								// also this is optional
 				FARPROC SetWindowTheme = GetProcAddress(uxtheme, "SetWindowTheme");
 				if (SetWindowTheme != NULL) {
-					SetWindowTheme(hwnd, " ", " ");					// turn off theme
+					SetWindowTheme(hwnd, " ", " ");				// turn off theme
 				}
 			}
 
-			(void) GetSystemMenu(hwnd, false);		// trigger the program create system menu
 			SetWindowPos(hwnd, NULL, rect.left, rect.top, window_size.cx, window_size.cy,
-						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
+						SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW);
+			(void) GetSystemMenu(hwnd, false);					// trigger the program create system menu
 			set_is_mouse_leave(hwnd, true);
 	        break;
 		}
@@ -348,7 +354,10 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			lparam = -1;
 			return true;
 		}
-		// case WM_NCPAINT: {
+		case WM_NCPAINT: {
+			return true;
+		}
+		// case WM_ERASEBKGND: {
 		// 	return true;
 		// }
 		case WM_PAINT: {
@@ -432,11 +441,12 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return HTNOWHERE;
 		}
 		// https://stackoverflow.com/questions/53000291/how-to-smooth-ugly-jitter-flicker-jumping-when-resizing-windows-especially-drag
+		// https://github.com/Thomas-Mielke-Software/ECTImport/blob/ff4ba7b31a4a220c801029a10bc5305a7c9fca71/ResizableLayout.cpp#L858
 		case WM_NCCALCSIZE: {
 			if (wparam == true) {
-				// NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
-				// params->rgrc[0].right -= border_width;
-				// params->rgrc[0].bottom -= border_width;
+				NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS*) lparam;
+				params->rgrc[0].bottom += is_maximized ? 0 : border_width;
+				params->rgrc[1] = params->rgrc[2];
 				return WVR_VALIDRECTS;			// make the resize smoothly
 			}
 			return 0;							// disable default behaviour
@@ -453,14 +463,15 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 								mi.rcWork.left, mi.rcWork.top,
 								mi.rcWork.right - mi.rcWork.left,
 								mi.rcWork.bottom - mi.rcWork.top - 1,	// -1 for not overlap the taskbar (fullscreen)
-								SWP_FRAMECHANGED);
+								SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOREDRAW);
 				}
 			}
 			else if (wparam == SIZE_RESTORED) {
 				SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+							SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOREDRAW);
 			}
-			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+			// RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
 			InvalidateRect(hwnd, NULL, false);
 			break;
 		}
@@ -641,18 +652,11 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			SetCursor(LoadCursor(NULL, IDC_ARROW));
 			break;
 		}
-		// case WM_WINDOWPOSCHANGING: {
-		// 	WINDOWPOS* lpwpos = (WINDOWPOS*) lparam;
-		// 	// // lpwpos->flags |= SWP_NOCOPYBITS;
-		// 	// if (!(lpwpos->flags & SWP_NOSIZE)) {
-		// 	// 	RECT rc;
-        // 	// 	GetClientRect(hwnd, &rc);
-		//     //     // rc.left = rc.right - border_width;
-		//     //     rc.top = rc.bottom - border_width;
-		//     //     InvalidateRect(hwnd, &rc, true);
-		//     // }
-		// 	break;
-		// }
+		case WM_WINDOWPOSCHANGING: {
+			WINDOWPOS* wpos = (WINDOWPOS*) lparam;
+			wpos->flags |= SWP_NOCOPYBITS /*| SWP_NOREDRAW*/;		// problem with windows xp
+			break;
+		}
 	}
 
 	return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -667,7 +671,7 @@ bool register_window_class(const char *lpszClassName, WNDPROC lpfnWndProc) {
 		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
 		// .hInstance = GetModuleHandle(NULL),
 		// .hCursor = LoadCursor(NULL, IDC_ARROW),
-		// .style = CS_PARENTDC// | CS_HREDRAW | CS_VREDRAW
+		.style = CS_OWNDC// | CS_HREDRAW | CS_VREDRAW
 	});
 }
 

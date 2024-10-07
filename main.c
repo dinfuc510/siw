@@ -49,8 +49,8 @@
 #define CAPTION_MENU_WIDTH 46
 #define CAPTION_ICON_SIZE 10
 #define LEFT_PADDING 8
-#define SYSMENU_HIGHLIGHT_SIZE					4
-#define SYSMENU_HIGHLIGHT_BORDER_WIDTH 			1
+#define SYSMENU_HIGHLIGHT_SIZE 4
+#define SYSMENU_HIGHLIGHT_BORDER_WIDTH 1
 #define BORDER_WIDTH 1
 
 typedef struct UserData {
@@ -272,20 +272,21 @@ bool set_maximize_window(HWND hwnd) {
 }
 
 /* https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613 */
-static void on_draw(HWND hwnd, HDC hdc) {
-	const bool has_focus = !!GetFocus();
-	const CaptionButton cur_hovered_button = (CaptionButton) get_flag(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
-	const bool is_maximized = IsZoomed(hwnd);
+static void on_draw(HWND hwnd, const PAINTSTRUCT *ps) {
+	HDC hdc = ps->hdc;
+	bool has_focus = !!GetFocus();
+	CaptionButton cur_hovered_button = (CaptionButton) get_flag(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
+	bool is_maximized = IsZoomed(hwnd);
 
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
+	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
 
-	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
-	const unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; /* bgr 0x4f4f4f 0x2f2f2f 0xb16300 */
+	int border_width = is_maximized ? 0 : BORDER_WIDTH;
+	unsigned long title_bar_color = has_focus ? 0 : 0x2f2f2f; /* bgr 0x4f4f4f 0x2f2f2f 0xb16300 */
 	static unsigned long border_color = 0x4f4f4f;
 	static unsigned long background_color = 0x1e1e1e;				/* 0x0c0c0c */
-	const unsigned long foreground_color = has_focus ? 0xffffff : 0x7f7f7f;
+	unsigned long foreground_color = has_focus ? 0xffffff : 0x7f7f7f;
 
 	{
 		dr_rect(hdc, border_width, TITLEBAR_HEIGHT, window_size.cx - border_width*2, window_size.cy - TITLEBAR_HEIGHT - border_width, background_color);
@@ -302,8 +303,8 @@ static void on_draw(HWND hwnd, HDC hdc) {
 
 	int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
 	{
-		const SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
-		const unsigned long sysmenu_color = cur_hovered_button == CaptionButton_Sysmenu ?
+		SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
+		unsigned long sysmenu_color = cur_hovered_button == CaptionButton_Sysmenu ?
 											blend_color(title_bar_color, foreground_color, 20) : title_bar_color;
 		HICON sysmenu_icon = NULL;
 #ifdef GetClassLongPtr
@@ -329,18 +330,18 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		left_padding += sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE + /* padding */ 1;
 	}
 	{
-		const int length = GetWindowTextLength(hwnd);
+		int length = GetWindowTextLength(hwnd);
 		char text[MAX_PATH];
 		GetWindowText(hwnd, text, length + 1);
 		left_padding += dr_caption(hdc, text, length, (RECT) { left_padding, border_width, window_size.cx - CAPTION_MENU_WIDTH*3 - border_width, TITLEBAR_HEIGHT }, foreground_color);
 	}
 
-	const SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
+	SIZE button_size = { CAPTION_MENU_WIDTH, TITLEBAR_HEIGHT - border_width };
 	int right_padding = window_size.cx - border_width - button_size.cx;
 	POINT button_center = { right_padding + button_size.cx/2, border_width + button_size.cy/2 };
-	const int caption_icon_size = CAPTION_ICON_SIZE;
+	int caption_icon_size = CAPTION_ICON_SIZE;
 	{
-		const unsigned long close_button_color = cur_hovered_button == CaptionButton_Close ? 0xffffff : foreground_color;
+		unsigned long close_button_color = cur_hovered_button == CaptionButton_Close ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Close ? 0x2311e8 : title_bar_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2, button_center.x + caption_icon_size/2 + 1, button_center.y + caption_icon_size/2 + 1, 1, close_button_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y + caption_icon_size/2, button_center.x + caption_icon_size/2 + 1, button_center.y - caption_icon_size/2 - 1, 1, close_button_color);
@@ -348,10 +349,10 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		button_center.x -= button_size.cx;
 	}
 	{
-		const unsigned long maximize_button_color = cur_hovered_button == CaptionButton_Maximize ? 0xffffff : foreground_color;
+		unsigned long maximize_button_color = cur_hovered_button == CaptionButton_Maximize ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Maximize ? 0x1a1a1a : title_bar_color);
 		if (is_maximized) {
-			const int offset = 2;
+			int offset = 2;
 			dr_rect_line(hdc, button_center.x - caption_icon_size/2 + offset, button_center.y - caption_icon_size/2 - offset,
 						caption_icon_size, caption_icon_size, 1, maximize_button_color);
 			dr_rect(hdc, button_center.x - caption_icon_size/2, button_center.y - caption_icon_size/2,
@@ -364,7 +365,7 @@ static void on_draw(HWND hwnd, HDC hdc) {
 		button_center.x -= button_size.cx;
 	}
 	{
-		const unsigned long minimize_button_color = cur_hovered_button == CaptionButton_Minimize ? 0xffffff : foreground_color;
+		unsigned long minimize_button_color = cur_hovered_button == CaptionButton_Minimize ? 0xffffff : foreground_color;
 		dr_rect(hdc, right_padding, border_width, button_size.cx, button_size.cy, cur_hovered_button == CaptionButton_Minimize ? 0x1a1a1a : title_bar_color);
 		dr_line(hdc, button_center.x - caption_icon_size/2, button_center.y, button_center.x + caption_icon_size/2, button_center.y, 1, minimize_button_color);
 		right_padding -= button_size.cx;
@@ -395,22 +396,22 @@ bool track_mouse_leave(HWND hwnd) {
 static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	RECT rect;
 	GetWindowRect(hwnd, &rect);
-	const bool is_mouse_leave = (bool) get_flag(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH);
-	const bool is_maximized = IsZoomed(hwnd);
+	bool is_mouse_leave = (bool) get_flag(hwnd, IS_MOUSE_LEAVE_BIT, IS_MOUSE_LEAVE_BIT_LENGTH);
+	bool is_maximized = IsZoomed(hwnd);
 	SIZE window_size = { rect.right - rect.left, rect.bottom - rect.top };
-	const CaptionButton cur_hovered_button = (CaptionButton) get_flag(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
-	const int border_width = is_maximized ? 0 : BORDER_WIDTH;
-	const SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
-	const int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
+	CaptionButton cur_hovered_button = (CaptionButton) get_flag(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
+	int border_width = is_maximized ? 0 : BORDER_WIDTH;
+	SIZE sysmenu_size = { GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON) };
+	int left_padding = (LEFT_PADDING > (border_width*2 + SYSMENU_HIGHLIGHT_SIZE) ? LEFT_PADDING : border_width*2 + SYSMENU_HIGHLIGHT_SIZE);
 	RECT sysmenu_paint_rect = {
 		.left = left_padding-SYSMENU_HIGHLIGHT_SIZE,
 		.top = border_width + (TITLEBAR_HEIGHT-border_width)/2 - (sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2)/2,
 	};
 	sysmenu_paint_rect.right = sysmenu_paint_rect.left + sysmenu_size.cx + SYSMENU_HIGHLIGHT_SIZE*2;
 	sysmenu_paint_rect.bottom = sysmenu_paint_rect.top + sysmenu_size.cy + SYSMENU_HIGHLIGHT_SIZE*2;
-	const RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
-	const RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
-	const RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
+	RECT client_rect = { border_width, TITLEBAR_HEIGHT, window_size.cx - border_width, window_size.cy - border_width };
+	RECT title_bar_rect = { border_width, border_width, window_size.cx - border_width, TITLEBAR_HEIGHT };
+	RECT close_button_paint_rect = { window_size.cx - border_width - CAPTION_MENU_WIDTH, border_width,
 											window_size.cx - border_width, TITLEBAR_HEIGHT };
 	RECT maximize_button_paint_rect = close_button_paint_rect;
 	OffsetRect(&maximize_button_paint_rect, -CAPTION_MENU_WIDTH, 0);
@@ -500,23 +501,23 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		}
 		case WM_PAINT: {
 			PAINTSTRUCT ps;
-			HDC hdc = BeginPaint(hwnd, &ps);
+			BeginPaint(hwnd, &ps);
 #if !defined(DOUBLE_BUFFERING)
-			on_draw(hwnd, hdc);
+			on_draw(hwnd, &ps);
 #else
-			// https://www.codeproject.com/articles/617212/custom-controls-in-win-api-the-painting
-			const int cx = ps.rcPaint.right - ps.rcPaint.left, cy = ps.rcPaint.bottom - ps.rcPaint.top;
-			HDC memdc = CreateCompatibleDC(hdc);
-			HBITMAP membmp = CreateCompatibleBitmap(hdc, cx, cy);
+			/* https://www.codeproject.com/articles/617212/custom-controls-in-win-api-the-painting */
+			int cx = ps.rcPaint.right - ps.rcPaint.left, cy = ps.rcPaint.bottom - ps.rcPaint.top;
+			HDC memdc = CreateCompatibleDC(ps.hdc);
+			HBITMAP membmp = CreateCompatibleBitmap(ps.hdc, cx, cy);
 			assert(memdc != NULL && "ERROR: could not create the memory device context");
 			assert(membmp != NULL && "ERROR: could not create the memory bitmap");
 
 			HGDIOBJ oldbmp = SelectObject(memdc, membmp);
 			POINT old_point;
 			OffsetViewportOrgEx(memdc, -ps.rcPaint.left, -ps.rcPaint.top, &old_point);
-			on_draw(hwnd, memdc);
+			on_draw(hwnd, &ps);
 			SetViewportOrgEx(memdc, old_point.x, old_point.y, NULL);
-			BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+			BitBlt(ps.hdc, ps.rcPaint.left, ps.rcPaint.top,
 					cx, cy, memdc, 0, 0, SRCCOPY);
 
 			SelectObject(memdc, oldbmp);
@@ -527,10 +528,10 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			return 0;
 		}
 		case WM_NCHITTEST: {
-			const int border_check_sensitivity = is_maximized ? 0 : 4;
+			int border_check_sensitivity = is_maximized ? 0 : 4;
 			POINT mouse = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
 			MapWindowPoints(NULL, hwnd, &mouse, 1 /*number of points*/);
-			const int border_width_check = border_width + border_check_sensitivity;
+			int border_width_check = border_width + border_check_sensitivity;
 
 			if (!is_maximized) {
 				if (mouse.x < border_width_check && mouse.y < border_width_check) {
@@ -873,3 +874,10 @@ int main(void)
 	/* UnregisterClass("SWindow", g_hmodule); */
 	return 0;
 }
+
+/*
+TODO:
+	dpi
+	layered window
+	make this become library
+*/

@@ -1,1 +1,0 @@
-cl /nologo /Wall /wd4710 /wd4711 /O2 main.c /link user32.lib gdi32.lib /OUT:"siw.exe"

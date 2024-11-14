@@ -272,8 +272,7 @@ bool set_maximize_window(HWND hwnd) {
 }
 
 /* https://devblogs.microsoft.com/oldnewthing/20110520-00/?p=10613 */
-static void on_draw(HWND hwnd, const PAINTSTRUCT *ps) {
-	HDC hdc = ps->hdc;
+static void on_draw(HWND hwnd, HDC hdc) {
 	bool has_focus = !!GetFocus();
 	CaptionButton cur_hovered_button = (CaptionButton) get_flag(hwnd, CAPTION_BUTTON_BIT, CAPTION_BUTTON_BIT_LENGTH);
 	bool is_maximized = IsZoomed(hwnd);
@@ -379,7 +378,6 @@ static bool register_window_class(const char *class, WNDPROC proc) {
 		.lpszClassName = class,
 		.lpfnWndProc = proc,
 		.hIcon = LoadIcon(NULL, IDI_APPLICATION),
-		.hIconSm = LoadIcon(NULL, IDI_APPLICATION),
 		.style = CS_OWNDC
 	});
 }
@@ -502,8 +500,8 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 		case WM_PAINT: {
 			PAINTSTRUCT ps;
 			BeginPaint(hwnd, &ps);
-#if !defined(DOUBLE_BUFFERING)
-			on_draw(hwnd, &ps);
+#ifndef DOUBLE_BUFFERING
+			on_draw(hwnd, ps.hdc);
 #else
 			/* https://www.codeproject.com/articles/617212/custom-controls-in-win-api-the-painting */
 			int cx = ps.rcPaint.right - ps.rcPaint.left, cy = ps.rcPaint.bottom - ps.rcPaint.top;
@@ -515,7 +513,7 @@ static LRESULT win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 			HGDIOBJ oldbmp = SelectObject(memdc, membmp);
 			POINT old_point;
 			OffsetViewportOrgEx(memdc, -ps.rcPaint.left, -ps.rcPaint.top, &old_point);
-			on_draw(hwnd, &ps);
+			on_draw(hwnd, memdc);
 			SetViewportOrgEx(memdc, old_point.x, old_point.y, NULL);
 			BitBlt(ps.hdc, ps.rcPaint.left, ps.rcPaint.top,
 					cx, cy, memdc, 0, 0, SRCCOPY);
